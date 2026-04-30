@@ -59,6 +59,21 @@ interface DragState {
     startH:     number;
 }
 
+interface TextLayer {
+    text:     string;
+    x:        number;
+    y:        number;
+    fontSize: number;
+    color:    string;
+}
+
+interface TextDragState {
+    startMX: number;
+    startMY: number;
+    startX:  number;
+    startY:  number;
+}
+
 // ─── 繪圖面板（ItemView）──────────────────────────────────────────────────────
 class EasyNoteView extends ItemView {
     private settings: EasyNoteSettings;
@@ -79,8 +94,17 @@ class EasyNoteView extends ItemView {
     private selectedIdx = -1;
     private dragState:   DragState | null = null;
 
+    // 文字圖層
+    private textLayers:      TextLayer[]        = [];
+    private selectedTextIdx  = -1;
+    private textDragState:   TextDragState | null = null;
+    private textFontSize     = 24;
+    private _textEditing: {
+        el: HTMLTextAreaElement; layerIdx: number; x: number; y: number;
+    } | null = null;
+
     // 工具模式
-    private tool:       'draw' | 'select' = 'draw';
+    private tool:       'draw' | 'select' | 'text' = 'draw';
     private drawing     = false;
     private prevX       = 0;
     private prevY       = 0;
@@ -96,6 +120,8 @@ class EasyNoteView extends ItemView {
     private statusLabel!: HTMLSpanElement;
     private eraserBtn!:   HTMLButtonElement;
     private selectBtn!:   HTMLButtonElement;
+    private textBtn!:     HTMLButtonElement;
+    private fontSizeInput!: HTMLInputElement;
     private sizeSlider!:    HTMLInputElement;
     private opacitySlider!: HTMLInputElement;
     private colorBtns:    HTMLElement[] = [];
@@ -125,13 +151,17 @@ class EasyNoteView extends ItemView {
 
     // ── 開啟 ─────────────────────────────────────────────────────────────────
     async onOpen(): Promise<void> {
-        this.brushSize   = this.settings.defaultBrushSize;
-        this.colorIdx    = this.settings.defaultColorIdx;
-        this.eraser      = false;
-        this.tool        = 'draw';
-        this.imageLayers = [];
-        this.selectedIdx = -1;
-        this.dragState   = null;
+        this.brushSize        = this.settings.defaultBrushSize;
+        this.colorIdx           = this.settings.defaultColorIdx;
+        this.eraser             = false;
+        this.tool               = 'draw';
+        this.imageLayers        = [];
+        this.textLayers         = [];
+        this.selectedIdx        = -1;
+        this.selectedTextIdx    = -1;
+        this.dragState          = null;
+        this.textDragState      = null;
+        this._textEditing       = null;
 
         const root = this.containerEl.children[1] as HTMLElement;
         root.empty();
@@ -152,6 +182,7 @@ class EasyNoteView extends ItemView {
     }
 
     async onClose(): Promise<void> {
+        if (this._textEditing) { this._textEditing.el.remove(); this._textEditing = null; }
         document.removeEventListener('keydown', this._onKeyDown);
         document.removeEventListener('paste',   this._onPaste);
         window.removeEventListener('resize',    this._onResize);
@@ -237,6 +268,35 @@ class EasyNoteView extends ItemView {
             title: '選取並移動/縮放圖片（快捷：S）\nDel 刪除選取圖片',
         });
         this.selectBtn.addEventListener('click', () => this.setTool('select'));
+
+        // 文字工具（快捷 T）
+        this.textBtn = bar.createEl('button', {
+            cls:   'easynote-btn',
+            text:  '文字 (T)',
+            title: '新增 / 編輯文字（快捷：T）',
+        });
+        this.textBtn.addEventListener('click', () => this.setTool('text'));
+
+        // 字體大小
+        bar.createEl('span', { cls: 'easynote-label', text: '字體:' });
+        this.fontSizeInput           = bar.createEl('input');
+        this.fontSizeInput.type      = 'number';
+        this.fontSizeInput.min       = '8';
+        this.fontSizeInput.max       = '200';
+        this.fontSizeInput.value     = String(this.textFontSize);
+        this.fontSizeInput.title     = '文字字體大小';
+        this.fontSizeInput.className = 'easynote-font-size-input';
+        this.fontSizeInput.addEventListener('input', () => {
+            const v = parseInt(this.fontSizeInput.value);
+            if (v >= 8 && v <= 200) {
+                this.textFontSize = v;
+                // 如果有選中的文字圖層，同步更新字體
+                if (this.selectedTextIdx >= 0 && this.selectedTextIdx < this.textLayers.length) {
+                    this.textLayers[this.selectedTextIdx].fontSize = v;
+                    this.render();
+                }
+            }
+        });
 
         // 清除畫布（快捷 C）
         const clearBtn = bar.createEl('button', {
@@ -361,7 +421,28 @@ class EasyNoteView extends ItemView {
             if (e.button !== 0) return;
             const { x: mx, y: my } = this.toCanvasCoords(e);
 
-            if (this.tool === 'select') {
+            if (this.tool === 'text') {
+                // 文字工具：搜尋是否點到已有文字圖層
+                let hitTextIdx = -1;
+                for (let i = this.textLayers.length - 1; i >= 0; i--) {
+                    if (this.pointInText(mx, my, this.textLayers[i])) { hitTextIdx = i; break; }
+                }
+                this.openTextEditor(mx, my, hitTextIdx);
+            } else if (this.tool === 'select') {
+                // 先檢查文字圖層（文字層在繪畫層下方）
+                let hitText = -1;
+                for (let i = this.textLayers.length - 1; i >= 0; i--) {
+                    if (this.pointInText(mx, my, this.textLayers[i])) { hitText = i; break; }
+                }
+                if (hitText >= 0) {
+                    this.selectedTextIdx = hitText;
+                    this.selectedIdx     = -1;
+                    this.dragState       = null;
+                    const tl = this.textLayers[hitText];
+                    this.textDragState = { startMX: mx, startMY: my, startX: tl.x, startY: tl.y };
+                    this.render();
+                    return;
+                }
                 // 先檢查是否點到控點
                 if (this.selectedIdx >= 0) {
                     const h = this.hitHandle(mx, my, this.imageLayers[this.selectedIdx]);
@@ -372,12 +453,13 @@ class EasyNoteView extends ItemView {
                         return;
                     }
                 }
-                // 點到哪個圖層？（由上到下）
+                // 點到哪個圖片圖層？（由上到下）
                 let hit = -1;
                 for (let i = this.imageLayers.length - 1; i >= 0; i--) {
                     if (this.pointInLayer(mx, my, this.imageLayers[i])) { hit = i; break; }
                 }
-                this.selectedIdx = hit;
+                this.selectedIdx     = hit;
+                this.selectedTextIdx = -1;
                 if (hit >= 0) {
                     const lay = this.imageLayers[hit];
                     this.dragState = { handle: 'move', startMX: mx, startMY: my,
@@ -404,6 +486,16 @@ class EasyNoteView extends ItemView {
             if (this.tool === 'select') {
                 // 更新游標
                 this.updateCursor(mx, my);
+
+                // 文字拖曳
+                if (this.textDragState && this.selectedTextIdx >= 0) {
+                    const td = this.textDragState;
+                    const tl = this.textLayers[this.selectedTextIdx];
+                    tl.x = td.startX + (mx - td.startMX);
+                    tl.y = td.startY + (my - td.startMY);
+                    this.render();
+                    return;
+                }
 
                 if (this.dragState) {
                     const ds    = this.dragState;
@@ -473,16 +565,30 @@ class EasyNoteView extends ItemView {
         this.canvas.addEventListener('mouseup', (e) => {
             if (e.button === 1) {
                 this.isPanning = false;
-                this.canvas.style.cursor = this.tool === 'draw' ? 'crosshair' : 'default';
+                this.canvas.style.cursor = this.tool === 'draw' ? 'crosshair' : (this.tool === 'text' ? 'text' : 'default');
                 return;
             }
-            this.drawing   = false;
-            this.dragState = null;
+            this.drawing       = false;
+            this.dragState     = null;
+            this.textDragState = null;
         });
         this.canvas.addEventListener('mouseleave', () => {
-            this.isPanning = false;
-            this.drawing   = false;
-            this.dragState = null;
+            this.isPanning     = false;
+            this.drawing       = false;
+            this.dragState     = null;
+            this.textDragState = null;
+        });
+
+        // 雙擊選取模式下編輯文字
+        this.canvas.addEventListener('dblclick', (e) => {
+            if (this.tool !== 'select') return;
+            const { x: mx, y: my } = this.toCanvasCoords(e);
+            for (let i = this.textLayers.length - 1; i >= 0; i--) {
+                if (this.pointInText(mx, my, this.textLayers[i])) {
+                    this.openTextEditor(this.textLayers[i].x, this.textLayers[i].y, i);
+                    return;
+                }
+            }
         });
 
         // 滾輪縮放（Canva 風格，以游標位置為錨點）
@@ -582,11 +688,29 @@ class EasyNoteView extends ItemView {
         for (const lay of this.imageLayers) {
             this.ctx.drawImage(lay.img, lay.x, lay.y, lay.w, lay.h);
         }
-        // 3. 繪畫層（在圖片上方，可畫到圖片上）
+        // 3. 文字層（圖片上方，繪畫層下方）
+        for (const tl of this.textLayers) {
+            this.ctx.save();
+            this.ctx.font         = `${tl.fontSize}px sans-serif`;
+            this.ctx.fillStyle    = tl.color;
+            this.ctx.textBaseline = 'top';
+            const lines = tl.text.split('\n');
+            const lineH = tl.fontSize * 1.3;
+            for (let li = 0; li < lines.length; li++) {
+                this.ctx.fillText(lines[li], tl.x, tl.y + li * lineH);
+            }
+            this.ctx.restore();
+        }
+        // 4. 繪畫層（最上方）
         this.ctx.drawImage(this.paintCanvas, 0, 0);
-        // 4. 選取框 & 控點
-        if (this.tool === 'select' && this.selectedIdx >= 0) {
-            this.drawSelectionHandles(this.imageLayers[this.selectedIdx]);
+        // 5. 選取框 & 控點
+        if (this.tool === 'select') {
+            if (this.selectedIdx >= 0) {
+                this.drawSelectionHandles(this.imageLayers[this.selectedIdx]);
+            }
+            if (this.selectedTextIdx >= 0 && this.selectedTextIdx < this.textLayers.length) {
+                this.drawTextSelectionBox(this.textLayers[this.selectedTextIdx]);
+            }
         }
     }
 
@@ -636,12 +760,42 @@ class EasyNoteView extends ItemView {
         return mx >= lay.x && mx <= lay.x + lay.w && my >= lay.y && my <= lay.y + lay.h;
     }
 
+    /** 回傳文字圖層的近似包圍矩形 */
+    private textBBox(tl: TextLayer): { x: number; y: number; w: number; h: number } {
+        const lines  = tl.text.split('\n');
+        const maxLen = Math.max(...lines.map(l => l.length), 1);
+        const w      = maxLen * tl.fontSize * 0.6;
+        const h      = lines.length * tl.fontSize * 1.3;
+        return { x: tl.x, y: tl.y, w, h };
+    }
+
+    private pointInText(mx: number, my: number, tl: TextLayer): boolean {
+        const b = this.textBBox(tl);
+        return mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h;
+    }
+
+    private drawTextSelectionBox(tl: TextLayer): void {
+        const b = this.textBBox(tl);
+        this.ctx.save();
+        this.ctx.strokeStyle = '#0066ff';
+        this.ctx.lineWidth   = 1.5;
+        this.ctx.setLineDash([5, 3]);
+        this.ctx.strokeRect(b.x - 2, b.y - 2, b.w + 4, b.h + 4);
+        this.ctx.restore();
+    }
+
     private updateCursor(mx: number, my: number): void {
-        if (this.dragState) return;
+        if (this.dragState || this.textDragState) return;
         if (this.selectedIdx >= 0) {
             const h = this.hitHandle(mx, my, this.imageLayers[this.selectedIdx]);
             if (h === 'nw' || h === 'se') { this.canvas.style.cursor = 'nwse-resize'; return; }
             if (h === 'ne' || h === 'sw') { this.canvas.style.cursor = 'nesw-resize'; return; }
+        }
+        // 文字層
+        for (let i = this.textLayers.length - 1; i >= 0; i--) {
+            if (this.pointInText(mx, my, this.textLayers[i])) {
+                this.canvas.style.cursor = 'move'; return;
+            }
         }
         for (let i = this.imageLayers.length - 1; i >= 0; i--) {
             if (this.pointInLayer(mx, my, this.imageLayers[i])) {
@@ -701,8 +855,81 @@ class EasyNoteView extends ItemView {
 
     private clearCanvas(): void {
         this.paintCtx.clearRect(0, 0, this.paintCanvas.width, this.paintCanvas.height);
-        this.imageLayers = [];
-        this.selectedIdx = -1;
+        this.imageLayers     = [];
+        this.textLayers      = [];
+        this.selectedIdx     = -1;
+        this.selectedTextIdx = -1;
+        this.render();
+    }
+
+    // ── 文字編輯器 ────────────────────────────────────────────────────────────
+
+    /** 在畫布上方顯示浮動 textarea，讓使用者輸入文字 */
+    private openTextEditor(canvasX: number, canvasY: number, layerIdx = -1): void {
+        // 若已有開啟的編輯器，先提交再開新的
+        if (this._textEditing) this.commitTextEdit(this._textEditing);
+
+        // 解析目標位置（編輯現有 → 用舊座標，新增 → 用點擊座標）
+        const posX = layerIdx >= 0 ? this.textLayers[layerIdx].x : canvasX;
+        const posY = layerIdx >= 0 ? this.textLayers[layerIdx].y : canvasY;
+
+        const canvasRect = this.canvas.getBoundingClientRect();
+        const screenX    = canvasRect.left + posX * this.zoom;
+        const screenY    = canvasRect.top  + posY * this.zoom;
+
+        const fontSize = layerIdx >= 0 ? this.textLayers[layerIdx].fontSize : this.textFontSize;
+        const color    = layerIdx >= 0 ? this.textLayers[layerIdx].color    : this.colors[this.colorIdx];
+
+        const ta             = document.createElement('textarea');
+        ta.className         = 'easynote-text-editor';
+        ta.style.left        = `${screenX}px`;
+        ta.style.top         = `${screenY}px`;
+        ta.style.fontSize    = `${fontSize * this.zoom}px`;
+        ta.style.color       = color;
+        ta.rows              = 3;
+        if (layerIdx >= 0) ta.value = this.textLayers[layerIdx].text;
+
+        document.body.appendChild(ta);
+        setTimeout(() => { ta.focus(); if (layerIdx >= 0) ta.select(); }, 10);
+
+        const state = { el: ta, layerIdx, x: posX, y: posY };
+        this._textEditing = state;
+
+        ta.addEventListener('blur', () => {
+            if (this._textEditing === state) this.commitTextEdit(state);
+        });
+        ta.addEventListener('keydown', (e: KeyboardEvent) => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                if (this._textEditing === state) {
+                    this._textEditing = null;
+                    ta.remove();
+                }
+            }
+            e.stopPropagation(); // 防止快捷鍵
+        });
+    }
+
+    private commitTextEdit(state: { el: HTMLTextAreaElement; layerIdx: number; x: number; y: number }): void {
+        this._textEditing = null;
+        const text = state.el.value;
+        state.el.remove();
+
+        if (text.trim()) {
+            const fontSize = state.layerIdx >= 0 ? this.textLayers[state.layerIdx].fontSize : this.textFontSize;
+            const color    = state.layerIdx >= 0 ? this.textLayers[state.layerIdx].color    : this.colors[this.colorIdx];
+            if (state.layerIdx >= 0) {
+                this.textLayers[state.layerIdx].text = text;
+            } else {
+                this.textLayers.push({ text, x: state.x, y: state.y, fontSize, color });
+            }
+        } else if (state.layerIdx >= 0) {
+            // 清空內容 → 刪除此文字圖層
+            this.textLayers.splice(state.layerIdx, 1);
+            if (this.selectedTextIdx >= state.layerIdx) {
+                this.selectedTextIdx = Math.max(-1, this.selectedTextIdx - 1);
+            }
+        }
         this.render();
     }
 
@@ -744,15 +971,22 @@ class EasyNoteView extends ItemView {
 
     // ── 工具切換 ──────────────────────────────────────────────────────────────
 
-    private setTool(t: 'draw' | 'select'): void {
+    private setTool(t: 'draw' | 'select' | 'text'): void {
         this.tool = t;
         if (t === 'draw') {
             this.canvas.style.cursor = 'crosshair';
             this.selectBtn.removeClass('active');
+            this.textBtn.removeClass('active');
             this.eraserBtn.toggleClass('active', this.eraser);
-        } else {
+        } else if (t === 'select') {
             this.canvas.style.cursor = 'default';
             this.selectBtn.addClass('active');
+            this.textBtn.removeClass('active');
+            this.eraserBtn.removeClass('active');
+        } else { // text
+            this.canvas.style.cursor = 'text';
+            this.textBtn.addClass('active');
+            this.selectBtn.removeClass('active');
             this.eraserBtn.removeClass('active');
         }
         this.refreshStatus();
@@ -785,8 +1019,11 @@ class EasyNoteView extends ItemView {
     private refreshStatus(): void {
         const zoomStr = `縮放: ${Math.round(this.zoom * 100)}%`;
         if (this.tool === 'select') {
-            const n = this.imageLayers.length;
-            this.statusLabel.textContent = `選取模式 | 圖片: ${n} 張 | ${zoomStr}`;
+            const ni = this.imageLayers.length;
+            const nt = this.textLayers.length;
+            this.statusLabel.textContent = `選取模式 | 圖片: ${ni} 張 | 文字: ${nt} 個 | ${zoomStr}`;
+        } else if (this.tool === 'text') {
+            this.statusLabel.textContent = `工具: 文字 | 字體: ${this.textFontSize}px | ${zoomStr}`;
         } else {
             const toolName = this.eraser ? '橡皮擦' : `${this.colorNames[this.colorIdx]} 鉛筆`;
             const opPct    = Math.round(this.brushOpacity * 100);
@@ -804,6 +1041,9 @@ class EasyNoteView extends ItemView {
             case 's': case 'S':
                 this.setTool(this.tool === 'select' ? 'draw' : 'select');
                 break;
+            case 't': case 'T':
+                this.setTool(this.tool === 'text' ? 'draw' : 'text');
+                break;
             case 'c': case 'C':
                 if (this.tool !== 'select') this.clearCanvas();
                 break;
@@ -811,11 +1051,18 @@ class EasyNoteView extends ItemView {
                 this.toggleEraser();
                 break;
             case 'Delete': case 'Backspace':
-                if (this.tool === 'select' && this.selectedIdx >= 0) {
-                    this.imageLayers.splice(this.selectedIdx, 1);
-                    this.selectedIdx = -1;
-                    this.render();
-                    this.refreshStatus();
+                if (this.tool === 'select') {
+                    if (this.selectedIdx >= 0) {
+                        this.imageLayers.splice(this.selectedIdx, 1);
+                        this.selectedIdx = -1;
+                        this.render();
+                        this.refreshStatus();
+                    } else if (this.selectedTextIdx >= 0) {
+                        this.textLayers.splice(this.selectedTextIdx, 1);
+                        this.selectedTextIdx = -1;
+                        this.render();
+                        this.refreshStatus();
+                    }
                 }
                 break;
             case '1': this.setColor(0); break;
@@ -877,6 +1124,19 @@ class EasyNoteView extends ItemView {
             // 圖片層（底部）
             for (const lay of this.imageLayers) {
                 tc.drawImage(lay.img, lay.x, lay.y, lay.w, lay.h);
+            }
+            // 文字層（中間）
+            for (const tl of this.textLayers) {
+                tc.save();
+                tc.font         = `${tl.fontSize}px sans-serif`;
+                tc.fillStyle    = tl.color;
+                tc.textBaseline = 'top';
+                const lines = tl.text.split('\n');
+                const lineH = tl.fontSize * 1.3;
+                for (let li = 0; li < lines.length; li++) {
+                    tc.fillText(lines[li], tl.x, tl.y + li * lineH);
+                }
+                tc.restore();
             }
             // 繪畫層（上方）
             tc.drawImage(this.paintCanvas, 0, 0);
