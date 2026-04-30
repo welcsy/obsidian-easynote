@@ -343,10 +343,11 @@ class EasyNoteView extends ItemView {
                 this.updateCursor(mx, my);
 
                 if (this.dragState) {
-                    const ds  = this.dragState;
-                    const dx  = mx - ds.startMX;
-                    const dy  = my - ds.startMY;
-                    const lay = this.imageLayers[this.selectedIdx];
+                    const ds    = this.dragState;
+                    const dx    = mx - ds.startMX;
+                    const dy    = my - ds.startMY;
+                    const lay   = this.imageLayers[this.selectedIdx];
+                    const ratio = ds.startW / ds.startH;  // 原始長寬比
 
                     if (ds.handle === 'move') {
                         lay.x = ds.startX + dx;
@@ -355,24 +356,47 @@ class EasyNoteView extends ItemView {
                         // 縮放：各角拖曳改變 x/y/w/h
                         const MIN = 20;
                         if (ds.handle === 'nw') {
-                            const nw = Math.max(MIN, ds.startW - dx);
-                            const nh = Math.max(MIN, ds.startH - dy);
+                            let nw = Math.max(MIN, ds.startW - dx);
+                            let nh = Math.max(MIN, ds.startH - dy);
+                            if (e.shiftKey) {
+                                // 以較大變化量為主，保持比例
+                                const scale = Math.max((ds.startW - dx) / ds.startW, (ds.startH - dy) / ds.startH);
+                                nw = Math.max(MIN, ds.startW * scale);
+                                nh = Math.max(MIN, nw / ratio);
+                            }
                             lay.x = ds.startX + (ds.startW - nw);
                             lay.y = ds.startY + (ds.startH - nh);
                             lay.w = nw; lay.h = nh;
                         } else if (ds.handle === 'ne') {
-                            lay.w = Math.max(MIN, ds.startW + dx);
-                            const nh = Math.max(MIN, ds.startH - dy);
+                            let nw = Math.max(MIN, ds.startW + dx);
+                            let nh = Math.max(MIN, ds.startH - dy);
+                            if (e.shiftKey) {
+                                const scale = Math.max((ds.startW + dx) / ds.startW, (ds.startH - dy) / ds.startH);
+                                nw = Math.max(MIN, ds.startW * scale);
+                                nh = Math.max(MIN, nw / ratio);
+                            }
+                            lay.w = nw;
                             lay.y = ds.startY + (ds.startH - nh);
                             lay.h = nh;
                         } else if (ds.handle === 'sw') {
-                            const nw = Math.max(MIN, ds.startW - dx);
+                            let nw = Math.max(MIN, ds.startW - dx);
+                            let nh = Math.max(MIN, ds.startH + dy);
+                            if (e.shiftKey) {
+                                const scale = Math.max((ds.startW - dx) / ds.startW, (ds.startH + dy) / ds.startH);
+                                nw = Math.max(MIN, ds.startW * scale);
+                                nh = Math.max(MIN, nw / ratio);
+                            }
                             lay.x = ds.startX + (ds.startW - nw);
-                            lay.w = nw;
-                            lay.h = Math.max(MIN, ds.startH + dy);
+                            lay.w = nw; lay.h = nh;
                         } else { // se
-                            lay.w = Math.max(MIN, ds.startW + dx);
-                            lay.h = Math.max(MIN, ds.startH + dy);
+                            let nw = Math.max(MIN, ds.startW + dx);
+                            let nh = Math.max(MIN, ds.startH + dy);
+                            if (e.shiftKey) {
+                                const scale = Math.max((ds.startW + dx) / ds.startW, (ds.startH + dy) / ds.startH);
+                                nw = Math.max(MIN, ds.startW * scale);
+                                nh = Math.max(MIN, nw / ratio);
+                            }
+                            lay.w = nw; lay.h = nh;
                         }
                     }
                     this.render();
