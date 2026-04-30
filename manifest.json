@@ -1,10 +1,10 @@
 {
-  "id": "godot-easynote",
-  "name": "Godot EasyNote",
-  "version": "1.0.10",
+  "id": "easynote",
+  "name": "Easy Note",
+  "version": "1.0.11",
   "minAppVersion": "1.0.0",
-  "description": "以 Godot Engine 風格打造的 Obsidian 手繪筆記面板，支援多色畫筆、橡皮擦、筆刷調整，並可將手繪圖儲存到 Vault。",
-  "author": "EasyNote",
+  "description": "在 Obsidian 側邊欄開啟一個全功能的手繪畫布，支援多色畫筆、文字圖層、圖片圖層，並可將成果儲存為 PNG 到 Vault。",
+  "author": "welcsy",
   "authorUrl": "",
   "fundingUrl": "",
   "isDesktopOnly": true
