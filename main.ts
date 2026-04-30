@@ -973,9 +973,11 @@ class CanvasSizeModal extends Modal {
 
 // ─── Vault 圖片選擇 Modal ──────────────────────────────────────────────────────
 class VaultImagePickerModal extends Modal {
-    private onChoose: (file: TFile) => void;
-    private searchInput!: HTMLInputElement;
-    private listEl!:      HTMLElement;
+    private onChoose:       (file: TFile) => void;
+    private searchInput!:   HTMLInputElement;
+    private sidebarEl!:     HTMLElement;
+    private gridEl!:        HTMLElement;
+    private selectedFolder: string | null = null;   // null = 全部
 
     private static readonly IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'];
 
@@ -987,43 +989,105 @@ class VaultImagePickerModal extends Modal {
     onOpen(): void {
         const { contentEl } = this;
         contentEl.empty();
+        this.modalEl.addClass('easynote-vault-picker-modal');
         contentEl.createEl('h3', { text: '選擇 Vault 圖片' });
 
-        this.searchInput           = contentEl.createEl('input');
-        this.searchInput.type      = 'text';
+        this.searchInput             = contentEl.createEl('input');
+        this.searchInput.type        = 'text';
         this.searchInput.placeholder = '搜尋圖片檔名…';
-        this.searchInput.className = 'easynote-picker-search';
-        this.searchInput.addEventListener('input', () => this.renderList());
+        this.searchInput.className   = 'easynote-picker-search';
+        this.searchInput.addEventListener('input', () => this.renderMain());
 
-        this.listEl = contentEl.createEl('div', { cls: 'easynote-picker-list' });
-        this.renderList();
+        // 主體：左側資料夾欄 + 右側縮圖區
+        const wrap     = contentEl.createEl('div', { cls: 'easynote-picker-wrap' });
+        this.sidebarEl = wrap.createEl('div', { cls: 'easynote-picker-sidebar' });
+        this.gridEl    = wrap.createEl('div', { cls: 'easynote-picker-grid' });
 
-        // 開啟後自動聚焦搜尋框
+        this.renderSidebar();
+        this.renderMain();
+
         setTimeout(() => this.searchInput.focus(), 50);
     }
 
-    private renderList(): void {
-        const query = this.searchInput.value.toLowerCase();
-        this.listEl.empty();
+    private getAllImages(): TFile[] {
+        return this.app.vault.getFiles().filter(f =>
+            VaultImagePickerModal.IMAGE_EXTS.includes(f.extension.toLowerCase())
+        );
+    }
 
-        const files = this.app.vault.getFiles().filter((f) => {
-            const ext = f.extension.toLowerCase();
-            return VaultImagePickerModal.IMAGE_EXTS.includes(ext)
-                && f.name.toLowerCase().includes(query);
+    private getFilteredFiles(): TFile[] {
+        const query = this.searchInput.value.toLowerCase();
+        return this.getAllImages().filter(f => {
+            const matchQuery  = !query
+                || f.name.toLowerCase().includes(query)
+                || f.path.toLowerCase().includes(query);
+            const matchFolder = this.selectedFolder === null
+                || (f.parent?.path ?? '/') === this.selectedFolder;
+            return matchQuery && matchFolder;
         });
+    }
+
+    private renderSidebar(): void {
+        this.sidebarEl.empty();
+        const allImages = this.getAllImages();
+
+        // 計算各資料夾圖片數
+        const folderCounts = new Map<string, number>();
+        for (const f of allImages) {
+            const folder = f.parent?.path ?? '/';
+            folderCounts.set(folder, (folderCounts.get(folder) ?? 0) + 1);
+        }
+
+        // 「全部」項目
+        this.makeSidebarItem('🗂️', '全部', allImages.length, null);
+        this.sidebarEl.createEl('div', { cls: 'easynote-picker-sidebar-sep' });
+
+        // 各資料夾，根目錄優先
+        const folders = [...folderCounts.keys()].sort((a, b) => {
+            if (a === '/') return -1;
+            if (b === '/') return  1;
+            return a.localeCompare(b);
+        });
+        for (const folder of folders) {
+            const label   = folder === '/' ? '根目錄' : (folder.split('/').pop() ?? folder);
+            const tooltip = folder === '/' ? '根目錄' : folder;
+            this.makeSidebarItem('📁', label, folderCounts.get(folder)!, folder, tooltip);
+        }
+    }
+
+    private makeSidebarItem(
+        icon: string, label: string, count: number,
+        folder: string | null, tooltip?: string,
+    ): void {
+        const item = this.sidebarEl.createEl('div', { cls: 'easynote-picker-sidebar-item' });
+        if (this.selectedFolder === folder) item.addClass('is-active');
+        if (tooltip) item.title = tooltip;
+        item.createEl('span', { cls: 'easynote-picker-sidebar-icon',  text: icon });
+        item.createEl('span', { cls: 'easynote-picker-sidebar-label', text: label });
+        item.createEl('span', { cls: 'easynote-picker-sidebar-count', text: `${count}` });
+        item.addEventListener('click', () => {
+            this.selectedFolder = folder;
+            this.renderSidebar();
+            this.renderMain();
+        });
+    }
+
+    private renderMain(): void {
+        this.gridEl.empty();
+        const files = this.getFilteredFiles();
 
         if (files.length === 0) {
-            this.listEl.createEl('div', {
-                cls:  'easynote-picker-empty',
-                text: '找不到符合的圖片',
-            });
+            this.gridEl.createEl('div', { cls: 'easynote-picker-empty', text: '找不到符合的圖片' });
             return;
         }
 
         for (const file of files) {
-            const item = this.listEl.createEl('div', { cls: 'easynote-picker-item' });
+            const item  = this.gridEl.createEl('div', { cls: 'easynote-picker-item' });
+            const thumb = item.createEl('img') as HTMLImageElement;
+            thumb.className = 'easynote-picker-thumb';
+            thumb.src       = this.app.vault.getResourcePath(file);
+            thumb.alt       = file.name;
             item.createEl('span', { cls: 'easynote-picker-name', text: file.name });
-            item.createEl('span', { cls: 'easynote-picker-path', text: file.path });
             item.addEventListener('click', () => {
                 this.onChoose(file);
                 this.close();
