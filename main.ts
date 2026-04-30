@@ -96,6 +96,14 @@ class EasyNoteView extends ItemView {
     private colorBtns:    HTMLElement[] = [];
     private fileInput!:   HTMLInputElement;
 
+    // 縮放 & 平移（滾輪縮放，中鍵拖曳平移）
+    private zoom          = 1.0;
+    private isPanning     = false;
+    private panStartX     = 0;
+    private panStartY     = 0;
+    private panScrollLeft = 0;
+    private panScrollTop  = 0;
+
     // 事件繫結
     private _onKeyDown!: (e: KeyboardEvent)  => void;
     private _onPaste!:   (e: ClipboardEvent) => void;
@@ -276,8 +284,19 @@ class EasyNoteView extends ItemView {
 
         // ── 滑鼠事件 ──────────────────────────────────────────────────────────
         this.canvas.addEventListener('mousedown', (e) => {
+            // 中鍵按下 → 開始平移
+            if (e.button === 1) {
+                e.preventDefault();
+                this.isPanning     = true;
+                this.panStartX     = e.clientX;
+                this.panStartY     = e.clientY;
+                this.panScrollLeft = this.canvasWrapper.scrollLeft;
+                this.panScrollTop  = this.canvasWrapper.scrollTop;
+                this.canvas.style.cursor = 'grabbing';
+                return;
+            }
             if (e.button !== 0) return;
-            const mx = e.offsetX, my = e.offsetY;
+            const { x: mx, y: my } = this.toCanvasCoords(e);
 
             if (this.tool === 'select') {
                 // 先檢查是否點到控點
@@ -311,7 +330,13 @@ class EasyNoteView extends ItemView {
         });
 
         this.canvas.addEventListener('mousemove', (e) => {
-            const mx = e.offsetX, my = e.offsetY;
+            // 中鍵平移
+            if (this.isPanning) {
+                this.canvasWrapper.scrollLeft = this.panScrollLeft - (e.clientX - this.panStartX);
+                this.canvasWrapper.scrollTop  = this.panScrollTop  - (e.clientY - this.panStartY);
+                return;
+            }
+            const { x: mx, y: my } = this.toCanvasCoords(e);
 
             if (this.tool === 'select') {
                 // 更新游標
@@ -358,22 +383,40 @@ class EasyNoteView extends ItemView {
             }
         });
 
-        this.canvas.addEventListener('mouseup', () => {
+        this.canvas.addEventListener('mouseup', (e) => {
+            if (e.button === 1) {
+                this.isPanning = false;
+                this.canvas.style.cursor = this.tool === 'draw' ? 'crosshair' : 'default';
+                return;
+            }
             this.drawing   = false;
             this.dragState = null;
         });
         this.canvas.addEventListener('mouseleave', () => {
+            this.isPanning = false;
             this.drawing   = false;
             this.dragState = null;
         });
 
-        // 滾輪調整筆刷大小（只在繪圖模式下）
+        // 滾輪縮放（Canva 風格，以游標位置為錨點）
         this.canvas.addEventListener('wheel', (e) => {
             e.preventDefault();
-            if (this.tool !== 'draw') return;
-            const delta = e.deltaY < 0 ? 1 : -1;
-            this.brushSize = Math.max(MIN_BRUSH_SIZE, Math.min(MAX_BRUSH_SIZE, this.brushSize + delta));
-            this.sizeSlider.value = String(this.brushSize);
+            const ZOOM_STEP = 0.1;
+            const MIN_ZOOM  = 0.1;
+            const MAX_ZOOM  = 8.0;
+            const oldZoom   = this.zoom;
+            this.zoom = e.deltaY < 0
+                ? Math.min(MAX_ZOOM, this.zoom + ZOOM_STEP)
+                : Math.max(MIN_ZOOM, this.zoom - ZOOM_STEP);
+
+            // 以游標為縮放錨點，調整捲軸使游標下方畫布點保持不動
+            const wRect = this.canvasWrapper.getBoundingClientRect();
+            const cx    = e.clientX - wRect.left;
+            const cy    = e.clientY - wRect.top;
+            const ratio = this.zoom / oldZoom;
+            this.applyZoom();
+            this.canvasWrapper.scrollLeft = (this.canvasWrapper.scrollLeft + cx) * ratio - cx;
+            this.canvasWrapper.scrollTop  = (this.canvasWrapper.scrollTop  + cy) * ratio - cy;
             this.refreshStatus();
         }, { passive: false });
 
@@ -415,6 +458,7 @@ class EasyNoteView extends ItemView {
         this.canvas.width  = w;
         this.canvas.height = h;
         this.render();
+        this.applyZoom();
     }
 
     private resizeCanvas(): void {
@@ -428,6 +472,17 @@ class EasyNoteView extends ItemView {
         this.manualWidth  = w;
         this.manualHeight = h;
         this.applyCanvasSize(w, h);
+    }
+
+    /** 套用目前縮放比例到 canvas CSS 尺寸 */
+    private applyZoom(): void {
+        this.canvas.style.width  = `${this.canvas.width  * this.zoom}px`;
+        this.canvas.style.height = `${this.canvas.height * this.zoom}px`;
+    }
+
+    /** 將滑鼠 offsetX/offsetY (CSS px) 轉換為畫布邏輯座標 */
+    private toCanvasCoords(e: MouseEvent): { x: number; y: number } {
+        return { x: e.offsetX / this.zoom, y: e.offsetY / this.zoom };
     }
 
     // ── 合成渲染 ──────────────────────────────────────────────────────────────
@@ -625,12 +680,13 @@ class EasyNoteView extends ItemView {
     }
 
     private refreshStatus(): void {
+        const zoomStr = `縮放: ${Math.round(this.zoom * 100)}%`;
         if (this.tool === 'select') {
             const n = this.imageLayers.length;
-            this.statusLabel.textContent = `選取模式 | 圖片: ${n} 張`;
+            this.statusLabel.textContent = `選取模式 | 圖片: ${n} 張 | ${zoomStr}`;
         } else {
             const toolName = this.eraser ? '橡皮擦' : `${COLOR_NAMES[this.colorIdx]} 鉛筆`;
-            this.statusLabel.textContent = `工具: ${toolName} | 大小: ${this.brushSize}`;
+            this.statusLabel.textContent = `工具: ${toolName} | 大小: ${this.brushSize} | ${zoomStr}`;
         }
     }
 
@@ -671,6 +727,11 @@ class EasyNoteView extends ItemView {
             case '-':
                 this.brushSize        = Math.max(MIN_BRUSH_SIZE, this.brushSize - 2);
                 this.sizeSlider.value = String(this.brushSize);
+                this.refreshStatus();
+                break;
+            case '0':   // 重設縮放至 100%
+                this.zoom = 1.0;
+                this.applyZoom();
                 this.refreshStatus();
                 break;
         }
