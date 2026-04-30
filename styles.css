@@ -54,6 +54,35 @@
     margin:      0 2px;
 }
 
+/* 色彩按鈕 wrapper */
+.easynote-color-wrapper {
+    position:    relative;
+    flex-shrink: 0;
+}
+
+/* 雙擊彈出的顏色選擇浮動面板（定位在按鈕正下方）*/
+.easynote-color-panel {
+    position:         fixed;
+    z-index:          9999;
+    background:       var(--background-primary);
+    border:           1px solid var(--background-modifier-border);
+    border-radius:    6px;
+    padding:          6px;
+    box-shadow:       0 4px 12px rgba(0,0,0,0.25);
+    display:          flex;
+    align-items:      center;
+    justify-content:  center;
+}
+.easynote-color-panel input[type="color"] {
+    width:        80px;
+    height:       80px;
+    border:       none;
+    border-radius: 4px;
+    cursor:       pointer;
+    padding:      0;
+    background:   none;
+}
+
 /* 色彩選擇按鈕 */
 .easynote-color-btn {
     width:        26px;

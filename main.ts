@@ -20,10 +20,10 @@ const HANDLE_SIZE      = 8;   // 選取控點大小（px）
 
 const COLORS: string[] = [
     '#0d0d0d',
-    '#e62626',
-    '#1a66e5',
-    '#1abf33',
-    '#f29900',
+    '#F13F5E',
+    '#009BFF',
+    '#00A75E',
+    '#C89200',
 ];
 const COLOR_NAMES: string[] = ['黑色', '紅色', '藍色', '綠色', '橘色'];
 
@@ -80,19 +80,24 @@ class EasyNoteView extends ItemView {
     private dragState:   DragState | null = null;
 
     // 工具模式
-    private tool:      'draw' | 'select' = 'draw';
-    private drawing    = false;
-    private prevX      = 0;
-    private prevY      = 0;
-    private brushSize  = 6;
-    private colorIdx   = 0;
-    private eraser     = false;
+    private tool:       'draw' | 'select' = 'draw';
+    private drawing     = false;
+    private prevX       = 0;
+    private prevY       = 0;
+    private brushSize   = 6;
+    private brushOpacity = 1.0;  // 0.01 ~ 1.0
+    private colorIdx    = 0;
+    private eraser      = false;
+    // 小調色盤（實例独立，可自訂）
+    private colors:     string[] = [...COLORS];
+    private colorNames: string[] = [...COLOR_NAMES];
 
     // 工具列 DOM
     private statusLabel!: HTMLSpanElement;
     private eraserBtn!:   HTMLButtonElement;
     private selectBtn!:   HTMLButtonElement;
-    private sizeSlider!:  HTMLInputElement;
+    private sizeSlider!:    HTMLInputElement;
+    private opacitySlider!: HTMLInputElement;
     private colorBtns:    HTMLElement[] = [];
     private fileInput!:   HTMLInputElement;
 
@@ -159,16 +164,60 @@ class EasyNoteView extends ItemView {
         bar.createEl('span', { cls: 'easynote-title', text: '✏ EasyNote' });
         bar.createEl('div',  { cls: 'easynote-sep'  });
 
-        // 色彩按鈕（快捷 1~5）
+        // 色彩按鈕（單擊選色 / 雙擊開啟顏色選擇器 快捷 1~5）
         bar.createEl('span', { cls: 'easynote-label', text: '顏色:' });
         this.colorBtns = [];
-        for (let i = 0; i < COLORS.length; i++) {
-            const btn = bar.createEl('div', {
+        for (let i = 0; i < this.colors.length; i++) {
+            const wrapper = bar.createEl('div', { cls: 'easynote-color-wrapper' });
+
+            const btn = wrapper.createEl('div', {
                 cls:   'easynote-color-btn',
-                title: `${COLOR_NAMES[i]}（快捷：${i + 1}）`,
+                title: `${this.colorNames[i]}（快捷：${i + 1}）
+雙擊自訂顏色`,
             });
-            (btn as HTMLElement).style.background = COLORS[i];
+            (btn as HTMLElement).style.background = this.colors[i];
             btn.addEventListener('click', () => this.setColor(i));
+
+            // 雙擊 → 在按鈕正下方顯示顏色選擇面板
+            btn.addEventListener('dblclick', (e) => {
+                e.stopPropagation();
+                // 關閉其他已開啟的面板
+                document.querySelectorAll('.easynote-color-panel').forEach(el => el.remove());
+
+                const panel = document.createElement('div');
+                panel.className = 'easynote-color-panel';
+
+                const native = document.createElement('input');
+                native.type  = 'color';
+                native.value = this.colors[i];
+                panel.appendChild(native);
+
+                // 定位到 wrapper 正下方
+                const rect = wrapper.getBoundingClientRect();
+                panel.style.top  = `${rect.bottom + window.scrollY + 4}px`;
+                panel.style.left = `${rect.left   + window.scrollX}px`;
+                document.body.appendChild(panel);
+                native.focus();
+
+                native.addEventListener('input', () => {
+                    this.colors[i] = native.value;
+                    (btn as HTMLElement).style.background = native.value;
+                    if (this.colorIdx === i) this.refreshStatus();
+                    this.refreshColorBtns();
+                });
+
+                // 點擊面板外側關閉
+                const close = (ev: MouseEvent) => {
+                    if (!panel.contains(ev.target as Node)) {
+                        panel.remove();
+                        document.removeEventListener('mousedown', close, true);
+                    }
+                };
+                requestAnimationFrame(() =>
+                    document.addEventListener('mousedown', close, true)
+                );
+            });
+
             this.colorBtns.push(btn);
         }
         bar.createEl('div', { cls: 'easynote-sep' });
@@ -205,10 +254,24 @@ class EasyNoteView extends ItemView {
         this.sizeSlider.min       = String(MIN_BRUSH_SIZE);
         this.sizeSlider.max       = String(MAX_BRUSH_SIZE);
         this.sizeSlider.value     = String(this.brushSize);
-        this.sizeSlider.title     = '筆刷大小（滾輪快速調整）';
+        this.sizeSlider.title     = '筆刷大小';
         this.sizeSlider.className = 'easynote-slider';
         this.sizeSlider.addEventListener('input', () => {
             this.brushSize = parseInt(this.sizeSlider.value);
+            this.refreshStatus();
+        });
+
+        // 透明度滑桿
+        bar.createEl('span', { cls: 'easynote-label', text: '透明度:' });
+        this.opacitySlider           = bar.createEl('input');
+        this.opacitySlider.type      = 'range';
+        this.opacitySlider.min       = '1';
+        this.opacitySlider.max       = '100';
+        this.opacitySlider.value     = '100';
+        this.opacitySlider.title     = '筆刷透明度（1% 最透明，100% 不透明）';
+        this.opacitySlider.className = 'easynote-slider';
+        this.opacitySlider.addEventListener('input', () => {
+            this.brushOpacity = parseInt(this.opacitySlider.value) / 100;
             this.refreshStatus();
         });
         bar.createEl('div', { cls: 'easynote-sep' });
@@ -591,7 +654,7 @@ class EasyNoteView extends ItemView {
     // ── 繪圖核心 ──────────────────────────────────────────────────────────────
 
     private activeColor(): string {
-        return this.eraser ? '#000000' : COLORS[this.colorIdx];
+        return this.eraser ? '#000000' : this.colors[this.colorIdx];
     }
 
     private paintDot(x: number, y: number): void {
@@ -601,7 +664,8 @@ class EasyNoteView extends ItemView {
             this.paintCtx.fillStyle = 'rgba(0,0,0,1)';
         } else {
             this.paintCtx.globalCompositeOperation = 'source-over';
-            this.paintCtx.fillStyle = COLORS[this.colorIdx];
+            this.paintCtx.globalAlpha = this.brushOpacity;
+            this.paintCtx.fillStyle = this.colors[this.colorIdx];
         }
         this.paintCtx.beginPath();
         this.paintCtx.arc(x, y, this.brushSize / 2, 0, Math.PI * 2);
@@ -620,7 +684,8 @@ class EasyNoteView extends ItemView {
             this.paintCtx.fillStyle = 'rgba(0,0,0,1)';
         } else {
             this.paintCtx.globalCompositeOperation = 'source-over';
-            this.paintCtx.fillStyle = COLORS[this.colorIdx];
+            this.paintCtx.globalAlpha = this.brushOpacity;
+            this.paintCtx.fillStyle = this.colors[this.colorIdx];
         }
         for (let i = 0; i <= steps; i++) {
             const t = steps > 0 ? i / steps : 0;
@@ -723,8 +788,9 @@ class EasyNoteView extends ItemView {
             const n = this.imageLayers.length;
             this.statusLabel.textContent = `選取模式 | 圖片: ${n} 張 | ${zoomStr}`;
         } else {
-            const toolName = this.eraser ? '橡皮擦' : `${COLOR_NAMES[this.colorIdx]} 鉛筆`;
-            this.statusLabel.textContent = `工具: ${toolName} | 大小: ${this.brushSize} | ${zoomStr}`;
+            const toolName = this.eraser ? '橡皮擦' : `${this.colorNames[this.colorIdx]} 鉛筆`;
+            const opPct    = Math.round(this.brushOpacity * 100);
+            this.statusLabel.textContent = `工具: ${toolName} | 大小: ${this.brushSize} | 透明度: ${opPct}% | ${zoomStr}`;
         }
     }
 
