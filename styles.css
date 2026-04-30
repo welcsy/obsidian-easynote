@@ -127,15 +127,21 @@
     padding-right: 4px;
 }
 
-/* 畫布本體：填滿剩餘高度，十字鼠標 */
-.easynote-canvas {
-    display:    block;
+/* 畫布可捲動 wrapper */
+.easynote-canvas-wrapper {
     flex:       1;
-    cursor:     crosshair;
-    background: #ffffff;
-    /* 避免觸控裝置的預設捲動干擾 */
+    overflow:   auto;
+    background: #e0e0e0;  /* 灰底讓畫布邊界明顯 */
+}
+
+/* 畫布本體：十字鼠標，大小由 JS 控制 */
+.easynote-canvas {
+    display:      block;
+    cursor:       crosshair;
+    background:   #ffffff;
     touch-action: none;
-    transition: outline 0.1s;
+    /* 加陰影讓畫布邊界更清楚 */
+    box-shadow:   0 2px 8px rgba(0,0,0,0.18);
 }
 
 /* 拖曳圖片進入時的提示框線 */
@@ -199,4 +205,49 @@
     font-size: 11px;
     color:     var(--text-muted);
     margin-top: 2px;
+}
+
+/* ── 畫布大小 Modal ─────────────────────────────────────────────────────────── */
+
+.easynote-size-hint {
+    font-size:     12px;
+    color:         var(--text-muted);
+    margin-bottom: 12px;
+}
+
+.easynote-size-row {
+    display:     flex;
+    align-items: center;
+    gap:         8px;
+    margin-bottom: 14px;
+}
+
+.easynote-size-input {
+    width:         90px;
+    padding:       6px 8px;
+    font-size:     14px;
+    border-radius: 5px;
+    border:        1px solid var(--background-modifier-border);
+    background:    var(--background-primary);
+    color:         var(--text-normal);
+    text-align:    center;
+}
+
+.easynote-size-x {
+    font-size:  18px;
+    color:      var(--text-muted);
+    font-weight: 300;
+}
+
+.easynote-size-presets {
+    display:       flex;
+    flex-wrap:     wrap;
+    gap:           6px;
+    margin-bottom: 16px;
+}
+
+.easynote-size-btnrow {
+    display:         flex;
+    justify-content: flex-end;
+    gap:             8px;
 }

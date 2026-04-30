@@ -44,8 +44,11 @@ class EasyNoteView extends ItemView {
     private settings: EasyNoteSettings;
 
     // canvas
-    private canvas!:  HTMLCanvasElement;
-    private ctx!:     CanvasRenderingContext2D;
+    private canvas!:        HTMLCanvasElement;
+    private ctx!:           CanvasRenderingContext2D;
+    private canvasWrapper!: HTMLElement;
+    private manualWidth     = 0;   // 0 = 自動符合視窗
+    private manualHeight    = 0;
 
     // 繪圖狀態（對應 GDScript 狀態變數）
     private drawing   = false;
@@ -191,6 +194,22 @@ class EasyNoteView extends ItemView {
         });
         bar.createEl('div', { cls: 'easynote-sep' });
 
+        // 畫布大小
+        const canvasSizeBtn = bar.createEl('button', {
+            cls:   'easynote-btn',
+            text:  '畫布大小',
+            title: '調整畫布尺寸（現有內容保留）',
+        });
+        canvasSizeBtn.addEventListener('click', () => {
+            new CanvasSizeModal(
+                this.app,
+                this.canvas.width,
+                this.canvas.height,
+                (w, h) => this.setCanvasSize(w, h),
+            ).open();
+        });
+        bar.createEl('div', { cls: 'easynote-sep' });
+
         // 儲存 PNG 至 Vault
         const saveBtn = bar.createEl('button', {
             cls:   'easynote-btn easynote-btn-save',
@@ -206,7 +225,10 @@ class EasyNoteView extends ItemView {
 
     // ── Canvas 建構 ───────────────────────────────────────────────────────────
     private buildCanvas(root: HTMLElement): void {
-        this.canvas = root.createEl('canvas', { cls: 'easynote-canvas' });
+        // 可捲動 wrapper，畫布比視窗大時出現捲軸
+        this.canvasWrapper = root.createEl('div', { cls: 'easynote-canvas-wrapper' });
+
+        this.canvas = this.canvasWrapper.createEl('canvas', { cls: 'easynote-canvas' });
         const ctx   = this.canvas.getContext('2d');
         if (!ctx) { new Notice('EasyNote：無法取得 Canvas 2D context'); return; }
         this.ctx = ctx;
@@ -270,13 +292,9 @@ class EasyNoteView extends ItemView {
     }
 
     // ── Canvas 大小調整（保留已繪內容）──────────────────────────────────────
-    private resizeCanvas(): void {
-        const container = this.canvas.parentElement;
-        if (!container) return;
-        const w = container.clientWidth;
-        const h = Math.max(1, container.clientHeight - TOOLBAR_HEIGHT);
 
-        // 把舊內容備份到暫時 canvas
+    /** 備份舊內容，套用新尺寸，再還原 */
+    private applyCanvasSize(w: number, h: number): void {
         const tmp = document.createElement('canvas');
         tmp.width  = this.canvas.width  || w;
         tmp.height = this.canvas.height || h;
@@ -287,6 +305,21 @@ class EasyNoteView extends ItemView {
         this.ctx.fillStyle = '#ffffff';
         this.ctx.fillRect(0, 0, w, h);
         this.ctx.drawImage(tmp, 0, 0);
+    }
+
+    /** 視窗縮放時，只有在「自動符合」模式下才重新計算尺寸 */
+    private resizeCanvas(): void {
+        if (this.manualWidth > 0 && this.manualHeight > 0) return;
+        const w = Math.max(1, this.canvasWrapper.clientWidth);
+        const h = Math.max(1, this.canvasWrapper.clientHeight);
+        this.applyCanvasSize(w, h);
+    }
+
+    /** 使用者手動設定畫布大小 */
+    setCanvasSize(w: number, h: number): void {
+        this.manualWidth  = w;
+        this.manualHeight = h;
+        this.applyCanvasSize(w, h);
     }
 
     // ── 繪圖核心（移植自 GDScript _paint_dot_raw / _paint_stroke）────────────
@@ -485,6 +518,81 @@ class EasyNoteView extends ItemView {
             console.error('[EasyNote] saveDrawing error:', err);
         }
     }
+}
+
+// ─── 畫布大小設定 Modal ───────────────────────────────────────────────────────
+class CanvasSizeModal extends Modal {
+    private currentW: number;
+    private currentH: number;
+    private onApply: (w: number, h: number) => void;
+
+    constructor(app: App, currentW: number, currentH: number, onApply: (w: number, h: number) => void) {
+        super(app);
+        this.currentW = currentW;
+        this.currentH = currentH;
+        this.onApply  = onApply;
+    }
+
+    onOpen(): void {
+        const { contentEl } = this;
+        contentEl.empty();
+        contentEl.createEl('h3', { text: '設定畫布大小' });
+        contentEl.createEl('p', {
+            cls:  'easynote-size-hint',
+            text: `目前：${this.currentW} × ${this.currentH}　（現有內容會保留在左上角）`,
+        });
+
+        // 輸入列
+        const inputRow = contentEl.createEl('div', { cls: 'easynote-size-row' });
+
+        const wInput = inputRow.createEl('input');
+        wInput.type  = 'number';
+        wInput.min   = '100';
+        wInput.max   = '16000';
+        wInput.value = String(this.currentW);
+        wInput.className = 'easynote-size-input';
+
+        inputRow.createEl('span', { text: ' × ', cls: 'easynote-size-x' });
+
+        const hInput = inputRow.createEl('input');
+        hInput.type  = 'number';
+        hInput.min   = '100';
+        hInput.max   = '16000';
+        hInput.value = String(this.currentH);
+        hInput.className = 'easynote-size-input';
+
+        // 快速預設按鈕
+        const presetRow = contentEl.createEl('div', { cls: 'easynote-size-presets' });
+        const presets: [string, () => void][] = [
+            ['×2 寬',  () => { wInput.value = String(this.currentW * 2); }],
+            ['×2 高',  () => { hInput.value = String(this.currentH * 2); }],
+            ['×2 全',  () => { wInput.value = String(this.currentW * 2); hInput.value = String(this.currentH * 2); }],
+            ['1920×1080', () => { wInput.value = '1920'; hInput.value = '1080'; }],
+            ['3840×1080', () => { wInput.value = '3840'; hInput.value = '1080'; }],
+            ['3840×2160', () => { wInput.value = '3840'; hInput.value = '2160'; }],
+        ];
+        for (const [label, fn] of presets) {
+            const btn = presetRow.createEl('button', { cls: 'easynote-btn', text: label });
+            btn.addEventListener('click', fn);
+        }
+
+        // 確認 / 取消
+        const btnRow = contentEl.createEl('div', { cls: 'easynote-size-btnrow' });
+        const applyBtn = btnRow.createEl('button', {
+            cls:  'easynote-btn easynote-btn-save',
+            text: '套用',
+        });
+        applyBtn.addEventListener('click', () => {
+            const w = Math.max(100, Math.min(16000, parseInt(wInput.value) || this.currentW));
+            const h = Math.max(100, Math.min(16000, parseInt(hInput.value) || this.currentH));
+            this.onApply(w, h);
+            this.close();
+        });
+        const cancelBtn = btnRow.createEl('button', { cls: 'easynote-btn', text: '取消' });
+        cancelBtn.addEventListener('click', () => this.close());
+    }
+
+    onClose(): void { this.contentEl.empty(); }
 }
 
 // ─── Vault 圖片選擇 Modal ──────────────────────────────────────────────────────
