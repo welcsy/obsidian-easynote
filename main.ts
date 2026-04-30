@@ -451,8 +451,7 @@ class EasyNoteView extends ItemView {
 
         this.paintCanvas.width  = w;
         this.paintCanvas.height = h;
-        this.paintCtx.fillStyle = '#ffffff';
-        this.paintCtx.fillRect(0, 0, w, h);
+        // 不填白底，讓繪畫層保持透明（舊內容由 tmp 還原）
         this.paintCtx.drawImage(tmp, 0, 0);
 
         this.canvas.width  = w;
@@ -492,12 +491,12 @@ class EasyNoteView extends ItemView {
         // 1. 白底
         this.ctx.fillStyle = '#ffffff';
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-        // 2. 筆畫層
-        this.ctx.drawImage(this.paintCanvas, 0, 0);
-        // 3. 圖片圖層
+        // 2. 圖片層（底部）
         for (const lay of this.imageLayers) {
             this.ctx.drawImage(lay.img, lay.x, lay.y, lay.w, lay.h);
         }
+        // 3. 繪畫層（在圖片上方，可畫到圖片上）
+        this.ctx.drawImage(this.paintCanvas, 0, 0);
         // 4. 選取框 & 控點
         if (this.tool === 'select' && this.selectedIdx >= 0) {
             this.drawSelectionHandles(this.imageLayers[this.selectedIdx]);
@@ -568,14 +567,22 @@ class EasyNoteView extends ItemView {
     // ── 繪圖核心 ──────────────────────────────────────────────────────────────
 
     private activeColor(): string {
-        return this.eraser ? '#ffffff' : COLORS[this.colorIdx];
+        return this.eraser ? '#000000' : COLORS[this.colorIdx];
     }
 
     private paintDot(x: number, y: number): void {
+        this.paintCtx.save();
+        if (this.eraser) {
+            this.paintCtx.globalCompositeOperation = 'destination-out';
+            this.paintCtx.fillStyle = 'rgba(0,0,0,1)';
+        } else {
+            this.paintCtx.globalCompositeOperation = 'source-over';
+            this.paintCtx.fillStyle = COLORS[this.colorIdx];
+        }
         this.paintCtx.beginPath();
         this.paintCtx.arc(x, y, this.brushSize / 2, 0, Math.PI * 2);
-        this.paintCtx.fillStyle = this.activeColor();
         this.paintCtx.fill();
+        this.paintCtx.restore();
         this.render();
     }
 
@@ -583,21 +590,28 @@ class EasyNoteView extends ItemView {
         const dist  = Math.hypot(x2 - x1, y2 - y1);
         const step  = Math.max(1, this.brushSize * 0.15);
         const steps = Math.floor(dist / step);
+        this.paintCtx.save();
+        if (this.eraser) {
+            this.paintCtx.globalCompositeOperation = 'destination-out';
+            this.paintCtx.fillStyle = 'rgba(0,0,0,1)';
+        } else {
+            this.paintCtx.globalCompositeOperation = 'source-over';
+            this.paintCtx.fillStyle = COLORS[this.colorIdx];
+        }
         for (let i = 0; i <= steps; i++) {
             const t = steps > 0 ? i / steps : 0;
             const x = x1 + (x2 - x1) * t;
             const y = y1 + (y2 - y1) * t;
             this.paintCtx.beginPath();
             this.paintCtx.arc(x, y, this.brushSize / 2, 0, Math.PI * 2);
-            this.paintCtx.fillStyle = this.activeColor();
             this.paintCtx.fill();
         }
+        this.paintCtx.restore();
         this.render();
     }
 
     private clearCanvas(): void {
-        this.paintCtx.fillStyle = '#ffffff';
-        this.paintCtx.fillRect(0, 0, this.paintCanvas.width, this.paintCanvas.height);
+        this.paintCtx.clearRect(0, 0, this.paintCanvas.width, this.paintCanvas.height);
         this.imageLayers = [];
         this.selectedIdx = -1;
         this.render();
@@ -770,10 +784,12 @@ class EasyNoteView extends ItemView {
             const tc   = tmp.getContext('2d')!;
             tc.fillStyle = '#ffffff';
             tc.fillRect(0, 0, tmp.width, tmp.height);
-            tc.drawImage(this.paintCanvas, 0, 0);
+            // 圖片層（底部）
             for (const lay of this.imageLayers) {
                 tc.drawImage(lay.img, lay.x, lay.y, lay.w, lay.h);
             }
+            // 繪畫層（上方）
+            tc.drawImage(this.paintCanvas, 0, 0);
 
             const dataUrl = tmp.toDataURL('image/png');
             const base64  = dataUrl.split(',')[1];
