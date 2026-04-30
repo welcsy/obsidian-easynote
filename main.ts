@@ -63,8 +63,9 @@ class EasyNoteView extends ItemView {
     private fileInput!:   HTMLInputElement;
 
     // 事件繫結（onClose 時解除）
-    private _onKeyDown!: (e: KeyboardEvent) => void;
-    private _onResize!:  ()               => void;
+    private _onKeyDown!: (e: KeyboardEvent)  => void;
+    private _onPaste!:   (e: ClipboardEvent) => void;
+    private _onResize!:  ()                  => void;
 
     constructor(leaf: WorkspaceLeaf, settings: EasyNoteSettings) {
         super(leaf);
@@ -89,8 +90,10 @@ class EasyNoteView extends ItemView {
         this.buildCanvas(root);
 
         this._onKeyDown = this.handleKeyDown.bind(this);
+        this._onPaste   = this.handlePaste.bind(this);
         this._onResize  = this.resizeCanvas.bind(this);
         document.addEventListener('keydown', this._onKeyDown);
+        document.addEventListener('paste',   this._onPaste);
         window.addEventListener('resize',   this._onResize);
 
         this.refreshColorBtns();
@@ -99,6 +102,7 @@ class EasyNoteView extends ItemView {
 
     async onClose(): Promise<void> {
         document.removeEventListener('keydown', this._onKeyDown);
+        document.removeEventListener('paste',   this._onPaste);
         window.removeEventListener('resize',   this._onResize);
     }
 
@@ -425,6 +429,29 @@ class EasyNoteView extends ItemView {
                 this.sizeSlider.value = String(this.brushSize);
                 this.refreshStatus();
                 break;
+        }
+    }
+
+    // ── 剪貼簿貼上（Ctrl+V / Snipping Tool）─────────────────────────────────
+    private handlePaste(e: ClipboardEvent): void {
+        // 只在此 View 為當前 active 時響應
+        if (this.app.workspace.getActiveViewOfType(EasyNoteView) !== this) return;
+        // 不攔截輸入框內的貼上
+        const tag = (e.target as HTMLElement)?.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+
+        const items = e.clipboardData?.items;
+        if (!items) return;
+
+        for (let i = 0; i < items.length; i++) {
+            if (items[i].type.startsWith('image/')) {
+                const blob = items[i].getAsFile();
+                if (blob) {
+                    e.preventDefault();
+                    this.loadImageFromBlob(blob);
+                }
+                return;
+            }
         }
     }
 
