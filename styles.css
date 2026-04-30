@@ -1,0 +1,138 @@
+/* ── EasyNote Plugin Styles ─────────────────────────────────────────────── */
+
+/* 根容器：填滿整個面板，欄式排列 */
+.easynote-root {
+    display:        flex;
+    flex-direction: column;
+    height:         100%;
+    overflow:       hidden;
+    padding:        0 !important;
+}
+
+/* 工具列 */
+.easynote-toolbar {
+    display:          flex;
+    align-items:      center;
+    gap:              6px;
+    padding:          0 12px;
+    height:           52px;
+    background:       var(--background-secondary);
+    border-bottom:    1px solid var(--background-modifier-border);
+    flex-shrink:      0;
+    overflow-x:       auto;
+    overflow-y:       hidden;
+    white-space:      nowrap;
+    box-sizing:       border-box;
+}
+
+/* 彈性空隙（讓狀態列靠右） */
+.easynote-spacer {
+    flex: 1;
+}
+
+/* 標題 */
+.easynote-title {
+    font-size:    14px;
+    font-weight:  600;
+    color:        var(--text-normal);
+    white-space:  nowrap;
+}
+
+/* 普通說明文字 */
+.easynote-label {
+    font-size:   13px;
+    color:       var(--text-muted);
+    white-space: nowrap;
+}
+
+/* 分隔線 */
+.easynote-sep {
+    width:       1px;
+    height:      28px;
+    background:  var(--background-modifier-border);
+    flex-shrink: 0;
+    margin:      0 2px;
+}
+
+/* 色彩選擇按鈕 */
+.easynote-color-btn {
+    width:        26px;
+    height:       26px;
+    border-radius: 4px;
+    border:       2px solid var(--background-modifier-border);
+    cursor:       pointer;
+    flex-shrink:  0;
+    transition:   border-color 0.12s, box-shadow 0.12s;
+}
+
+.easynote-color-btn:hover {
+    border-color: var(--text-muted);
+}
+
+/* 選中狀態：明顯高亮外框 */
+.easynote-color-btn.active {
+    border-color: #fff;
+    box-shadow:   0 0 0 2px var(--interactive-accent);
+}
+
+/* 一般按鈕 */
+.easynote-btn {
+    padding:      4px 10px;
+    font-size:    12px;
+    border-radius: 4px;
+    border:       1px solid var(--background-modifier-border);
+    background:   var(--background-primary);
+    color:        var(--text-normal);
+    cursor:       pointer;
+    white-space:  nowrap;
+    flex-shrink:  0;
+    transition:   background 0.12s, color 0.12s;
+}
+
+.easynote-btn:hover {
+    background: var(--background-modifier-hover);
+}
+
+/* 橡皮擦啟用時 */
+.easynote-btn.active {
+    background:   var(--interactive-accent);
+    color:        var(--text-on-accent);
+    border-color: var(--interactive-accent);
+}
+
+/* 儲存按鈕（主色） */
+.easynote-btn-save {
+    background:   var(--interactive-accent);
+    color:        var(--text-on-accent);
+    border-color: var(--interactive-accent);
+}
+
+.easynote-btn-save:hover {
+    filter: brightness(1.1);
+}
+
+/* 筆刷大小滑桿 */
+.easynote-slider {
+    width:       110px;
+    flex-shrink: 0;
+    cursor:      pointer;
+}
+
+/* 狀態文字 */
+.easynote-status {
+    font-size:   12px;
+    color:       var(--text-muted);
+    white-space: nowrap;
+    flex-shrink: 0;
+    padding-right: 4px;
+}
+
+/* 畫布本體：填滿剩餘高度，十字鼠標 */
+.easynote-canvas {
+    display:    block;
+    flex:       1;
+    cursor:     crosshair;
+    background: #ffffff;
+    /* 避免觸控裝置的預設捲動干擾 */
+    touch-action: none;
+}
