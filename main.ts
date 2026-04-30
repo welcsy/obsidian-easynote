@@ -13,59 +13,90 @@ import {
 
 // ─── 常數（對應 EasyNote GDScript 的 COLORS / COLOR_NAMES）──────────────────
 const VIEW_TYPE        = 'godot-easynote';
-const TOOLBAR_HEIGHT   = 52;          // px，與 GDScript TOOLBAR_HEIGHT 相同
+const TOOLBAR_HEIGHT   = 52;
 const MIN_BRUSH_SIZE   = 1;
 const MAX_BRUSH_SIZE   = 60;
+const HANDLE_SIZE      = 8;   // 選取控點大小（px）
 
 const COLORS: string[] = [
-    '#0d0d0d',  // 黑色
-    '#e62626',  // 紅色
-    '#1a66e5',  // 藍色
-    '#1abf33',  // 綠色
-    '#f29900',  // 橘色
+    '#0d0d0d',
+    '#e62626',
+    '#1a66e5',
+    '#1abf33',
+    '#f29900',
 ];
 const COLOR_NAMES: string[] = ['黑色', '紅色', '藍色', '綠色', '橘色'];
 
-// ─── 設定介面 ─────────────────────────────────────────────────────────────────
+// ─── 型別 ─────────────────────────────────────────────────────────────────────
 interface EasyNoteSettings {
     defaultColorIdx:  number;
     defaultBrushSize: number;
     saveFolder:       string;
 }
-
 const DEFAULT_SETTINGS: EasyNoteSettings = {
     defaultColorIdx:  0,
     defaultBrushSize: 6,
     saveFolder:       'EasyNote',
 };
 
+interface ImageLayer {
+    img: HTMLImageElement;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+}
+
+type HandleType = 'move' | 'nw' | 'ne' | 'sw' | 'se';
+
+interface DragState {
+    handle:     HandleType;
+    startMX:    number;
+    startMY:    number;
+    startX:     number;
+    startY:     number;
+    startW:     number;
+    startH:     number;
+}
+
 // ─── 繪圖面板（ItemView）──────────────────────────────────────────────────────
 class EasyNoteView extends ItemView {
     private settings: EasyNoteSettings;
 
-    // canvas
+    // 可見 canvas（顯示合成結果）
     private canvas!:        HTMLCanvasElement;
     private ctx!:           CanvasRenderingContext2D;
     private canvasWrapper!: HTMLElement;
-    private manualWidth     = 0;   // 0 = 自動符合視窗
+    private manualWidth     = 0;
     private manualHeight    = 0;
 
-    // 繪圖狀態（對應 GDScript 狀態變數）
-    private drawing   = false;
-    private prevX     = 0;
-    private prevY     = 0;
-    private brushSize = 6;
-    private colorIdx  = 0;
-    private eraser    = false;
+    // 筆畫 canvas（offscreen，儲存手繪筆觸）
+    private paintCanvas!: HTMLCanvasElement;
+    private paintCtx!:    CanvasRenderingContext2D;
 
-    // 工具列 DOM 參考
+    // 圖片圖層
+    private imageLayers: ImageLayer[]  = [];
+    private selectedIdx = -1;
+    private dragState:   DragState | null = null;
+
+    // 工具模式
+    private tool:      'draw' | 'select' = 'draw';
+    private drawing    = false;
+    private prevX      = 0;
+    private prevY      = 0;
+    private brushSize  = 6;
+    private colorIdx   = 0;
+    private eraser     = false;
+
+    // 工具列 DOM
     private statusLabel!: HTMLSpanElement;
     private eraserBtn!:   HTMLButtonElement;
+    private selectBtn!:   HTMLButtonElement;
     private sizeSlider!:  HTMLInputElement;
     private colorBtns:    HTMLElement[] = [];
     private fileInput!:   HTMLInputElement;
 
-    // 事件繫結（onClose 時解除）
+    // 事件繫結
     private _onKeyDown!: (e: KeyboardEvent)  => void;
     private _onPaste!:   (e: ClipboardEvent) => void;
     private _onResize!:  ()                  => void;
@@ -81,9 +112,13 @@ class EasyNoteView extends ItemView {
 
     // ── 開啟 ─────────────────────────────────────────────────────────────────
     async onOpen(): Promise<void> {
-        this.brushSize = this.settings.defaultBrushSize;
-        this.colorIdx  = this.settings.defaultColorIdx;
-        this.eraser    = false;
+        this.brushSize   = this.settings.defaultBrushSize;
+        this.colorIdx    = this.settings.defaultColorIdx;
+        this.eraser      = false;
+        this.tool        = 'draw';
+        this.imageLayers = [];
+        this.selectedIdx = -1;
+        this.dragState   = null;
 
         const root = this.containerEl.children[1] as HTMLElement;
         root.empty();
@@ -97,7 +132,7 @@ class EasyNoteView extends ItemView {
         this._onResize  = this.resizeCanvas.bind(this);
         document.addEventListener('keydown', this._onKeyDown);
         document.addEventListener('paste',   this._onPaste);
-        window.addEventListener('resize',   this._onResize);
+        window.addEventListener('resize',    this._onResize);
 
         this.refreshColorBtns();
         this.refreshStatus();
@@ -106,7 +141,7 @@ class EasyNoteView extends ItemView {
     async onClose(): Promise<void> {
         document.removeEventListener('keydown', this._onKeyDown);
         document.removeEventListener('paste',   this._onPaste);
-        window.removeEventListener('resize',   this._onResize);
+        window.removeEventListener('resize',    this._onResize);
     }
 
     // ── 工具列建構 ────────────────────────────────────────────────────────────
@@ -138,6 +173,14 @@ class EasyNoteView extends ItemView {
         });
         this.eraserBtn.addEventListener('click', () => this.toggleEraser());
 
+        // 選取工具（快捷 S）
+        this.selectBtn = bar.createEl('button', {
+            cls:   'easynote-btn',
+            text:  '選取 (S)',
+            title: '選取並移動/縮放圖片（快捷：S）\nDel 刪除選取圖片',
+        });
+        this.selectBtn.addEventListener('click', () => this.setTool('select'));
+
         // 清除畫布（快捷 C）
         const clearBtn = bar.createEl('button', {
             cls:   'easynote-btn',
@@ -147,7 +190,7 @@ class EasyNoteView extends ItemView {
         clearBtn.addEventListener('click', () => this.clearCanvas());
         bar.createEl('div', { cls: 'easynote-sep' });
 
-        // 筆刷滑桿（對應 GDScript HSlider，滾輪也可調整）
+        // 筆刷滑桿
         bar.createEl('span', { cls: 'easynote-label', text: '筆刷:' });
         this.sizeSlider           = bar.createEl('input');
         this.sizeSlider.type      = 'range';
@@ -166,11 +209,10 @@ class EasyNoteView extends ItemView {
         const loadBtn = bar.createEl('button', {
             cls:   'easynote-btn',
             text:  '載入圖片',
-            title: '從本機載入圖片到畫布（也可直接拖曳）',
+            title: '從本機載入圖片（也可拖曳或 Ctrl+V）',
         });
         loadBtn.addEventListener('click', () => this.fileInput.click());
 
-        // 隱藏的 file input（只接受圖片）
         this.fileInput        = bar.createEl('input');
         this.fileInput.type   = 'file';
         this.fileInput.accept = 'image/*';
@@ -185,12 +227,10 @@ class EasyNoteView extends ItemView {
         const vaultBtn = bar.createEl('button', {
             cls:   'easynote-btn',
             text:  'Vault 圖片',
-            title: '從 Vault 中選取圖片載入畫布',
+            title: '從 Vault 中選取圖片',
         });
         vaultBtn.addEventListener('click', () => {
-            new VaultImagePickerModal(this.app, (file) => {
-                this.loadImageFromVault(file);
-            }).open();
+            new VaultImagePickerModal(this.app, (file) => this.loadImageFromVault(file)).open();
         });
         bar.createEl('div', { cls: 'easynote-sep' });
 
@@ -201,16 +241,12 @@ class EasyNoteView extends ItemView {
             title: '調整畫布尺寸（現有內容保留）',
         });
         canvasSizeBtn.addEventListener('click', () => {
-            new CanvasSizeModal(
-                this.app,
-                this.canvas.width,
-                this.canvas.height,
-                (w, h) => this.setCanvasSize(w, h),
-            ).open();
+            new CanvasSizeModal(this.app, this.canvas.width, this.canvas.height,
+                (w, h) => this.setCanvasSize(w, h)).open();
         });
         bar.createEl('div', { cls: 'easynote-sep' });
 
-        // 儲存 PNG 至 Vault
+        // 儲存 PNG
         const saveBtn = bar.createEl('button', {
             cls:   'easynote-btn easynote-btn-save',
             text:  '儲存 PNG',
@@ -218,96 +254,169 @@ class EasyNoteView extends ItemView {
         });
         saveBtn.addEventListener('click', () => this.saveDrawing());
 
-        // 狀態文字（靠右）
         bar.createEl('div', { cls: 'easynote-spacer' });
         this.statusLabel = bar.createEl('span', { cls: 'easynote-status' });
     }
 
     // ── Canvas 建構 ───────────────────────────────────────────────────────────
     private buildCanvas(root: HTMLElement): void {
-        // 可捲動 wrapper，畫布比視窗大時出現捲軸
         this.canvasWrapper = root.createEl('div', { cls: 'easynote-canvas-wrapper' });
-
         this.canvas = this.canvasWrapper.createEl('canvas', { cls: 'easynote-canvas' });
-        const ctx   = this.canvas.getContext('2d');
+        const ctx = this.canvas.getContext('2d');
         if (!ctx) { new Notice('EasyNote：無法取得 Canvas 2D context'); return; }
         this.ctx = ctx;
 
+        // offscreen 筆畫 canvas
+        this.paintCanvas = document.createElement('canvas');
+        const pctx = this.paintCanvas.getContext('2d');
+        if (!pctx) { new Notice('EasyNote：無法取得 paint canvas context'); return; }
+        this.paintCtx = pctx;
+
         this.resizeCanvas();
 
-        // 滑鼠按下 → 開始繪製（對應 GDScript MOUSE_BUTTON_LEFT pressed = true）
+        // ── 滑鼠事件 ──────────────────────────────────────────────────────────
         this.canvas.addEventListener('mousedown', (e) => {
-            this.drawing = true;
-            this.prevX   = e.offsetX;
-            this.prevY   = e.offsetY;
-            this.paintDot(e.offsetX, e.offsetY);
+            if (e.button !== 0) return;
+            const mx = e.offsetX, my = e.offsetY;
+
+            if (this.tool === 'select') {
+                // 先檢查是否點到控點
+                if (this.selectedIdx >= 0) {
+                    const h = this.hitHandle(mx, my, this.imageLayers[this.selectedIdx]);
+                    if (h) {
+                        const lay = this.imageLayers[this.selectedIdx];
+                        this.dragState = { handle: h, startMX: mx, startMY: my,
+                            startX: lay.x, startY: lay.y, startW: lay.w, startH: lay.h };
+                        return;
+                    }
+                }
+                // 點到哪個圖層？（由上到下）
+                let hit = -1;
+                for (let i = this.imageLayers.length - 1; i >= 0; i--) {
+                    if (this.pointInLayer(mx, my, this.imageLayers[i])) { hit = i; break; }
+                }
+                this.selectedIdx = hit;
+                if (hit >= 0) {
+                    const lay = this.imageLayers[hit];
+                    this.dragState = { handle: 'move', startMX: mx, startMY: my,
+                        startX: lay.x, startY: lay.y, startW: lay.w, startH: lay.h };
+                }
+                this.render();
+            } else {
+                // 畫筆 / 橡皮擦
+                this.drawing = true;
+                this.prevX = mx; this.prevY = my;
+                this.paintDot(mx, my);
+            }
         });
 
-        // 滑鼠移動 → 插值筆觸（對應 GDScript InputEventMouseMotion）
         this.canvas.addEventListener('mousemove', (e) => {
-            if (!this.drawing) return;
-            this.paintStroke(this.prevX, this.prevY, e.offsetX, e.offsetY);
-            this.prevX = e.offsetX;
-            this.prevY = e.offsetY;
+            const mx = e.offsetX, my = e.offsetY;
+
+            if (this.tool === 'select') {
+                // 更新游標
+                this.updateCursor(mx, my);
+
+                if (this.dragState) {
+                    const ds  = this.dragState;
+                    const dx  = mx - ds.startMX;
+                    const dy  = my - ds.startMY;
+                    const lay = this.imageLayers[this.selectedIdx];
+
+                    if (ds.handle === 'move') {
+                        lay.x = ds.startX + dx;
+                        lay.y = ds.startY + dy;
+                    } else {
+                        // 縮放：各角拖曳改變 x/y/w/h
+                        const MIN = 20;
+                        if (ds.handle === 'nw') {
+                            const nw = Math.max(MIN, ds.startW - dx);
+                            const nh = Math.max(MIN, ds.startH - dy);
+                            lay.x = ds.startX + (ds.startW - nw);
+                            lay.y = ds.startY + (ds.startH - nh);
+                            lay.w = nw; lay.h = nh;
+                        } else if (ds.handle === 'ne') {
+                            lay.w = Math.max(MIN, ds.startW + dx);
+                            const nh = Math.max(MIN, ds.startH - dy);
+                            lay.y = ds.startY + (ds.startH - nh);
+                            lay.h = nh;
+                        } else if (ds.handle === 'sw') {
+                            const nw = Math.max(MIN, ds.startW - dx);
+                            lay.x = ds.startX + (ds.startW - nw);
+                            lay.w = nw;
+                            lay.h = Math.max(MIN, ds.startH + dy);
+                        } else { // se
+                            lay.w = Math.max(MIN, ds.startW + dx);
+                            lay.h = Math.max(MIN, ds.startH + dy);
+                        }
+                    }
+                    this.render();
+                }
+            } else if (this.drawing) {
+                this.paintStroke(this.prevX, this.prevY, mx, my);
+                this.prevX = mx; this.prevY = my;
+            }
         });
 
-        // 滑鼠放開 / 移出
-        this.canvas.addEventListener('mouseup',    () => { this.drawing = false; });
-        this.canvas.addEventListener('mouseleave', () => { this.drawing = false; });
+        this.canvas.addEventListener('mouseup', () => {
+            this.drawing   = false;
+            this.dragState = null;
+        });
+        this.canvas.addEventListener('mouseleave', () => {
+            this.drawing   = false;
+            this.dragState = null;
+        });
 
-        // 滾輪調整筆刷大小（對應 GDScript MOUSE_BUTTON_WHEEL_UP / DOWN）
+        // 滾輪調整筆刷大小（只在繪圖模式下）
         this.canvas.addEventListener('wheel', (e) => {
             e.preventDefault();
-            const delta    = e.deltaY < 0 ? 1 : -1;
+            if (this.tool !== 'draw') return;
+            const delta = e.deltaY < 0 ? 1 : -1;
             this.brushSize = Math.max(MIN_BRUSH_SIZE, Math.min(MAX_BRUSH_SIZE, this.brushSize + delta));
             this.sizeSlider.value = String(this.brushSize);
             this.refreshStatus();
         }, { passive: false });
 
-        // 拖曳圖片到畫布（本機檔案 或 Vault 路徑）
+        // 拖曳圖片進入
         this.canvas.addEventListener('dragover', (e) => {
             e.preventDefault();
             this.canvas.addClass('easynote-drag-over');
         });
-        this.canvas.addEventListener('dragleave', () => {
-            this.canvas.removeClass('easynote-drag-over');
-        });
+        this.canvas.addEventListener('dragleave', () => this.canvas.removeClass('easynote-drag-over'));
         this.canvas.addEventListener('drop', (e) => {
             e.preventDefault();
             this.canvas.removeClass('easynote-drag-over');
-            // 優先處理本機檔案
             const file = e.dataTransfer?.files?.[0];
-            if (file && file.type.startsWith('image/')) {
-                this.loadImageFromBlob(file);
-                return;
-            }
-            // 從 Obsidian 檔案總管拖入（plain text = vault 相對路徑）
+            if (file && file.type.startsWith('image/')) { this.loadImageFromBlob(file); return; }
             const text = e.dataTransfer?.getData('text/plain').trim();
             if (text) {
-                const vaultFile = this.app.vault.getFileByPath(normalizePath(text));
-                if (vaultFile) this.loadImageFromVault(vaultFile);
+                const vf = this.app.vault.getFileByPath(normalizePath(text));
+                if (vf) this.loadImageFromVault(vf);
                 else new Notice(`EasyNote：找不到 Vault 檔案「${text}」`);
             }
         });
     }
 
-    // ── Canvas 大小調整（保留已繪內容）──────────────────────────────────────
+    // ── Canvas 大小調整 ───────────────────────────────────────────────────────
 
-    /** 備份舊內容，套用新尺寸，再還原 */
     private applyCanvasSize(w: number, h: number): void {
+        // 備份 paintCanvas
         const tmp = document.createElement('canvas');
-        tmp.width  = this.canvas.width  || w;
-        tmp.height = this.canvas.height || h;
-        tmp.getContext('2d')!.drawImage(this.canvas, 0, 0);
+        tmp.width  = this.paintCanvas.width  || w;
+        tmp.height = this.paintCanvas.height || h;
+        tmp.getContext('2d')!.drawImage(this.paintCanvas, 0, 0);
+
+        this.paintCanvas.width  = w;
+        this.paintCanvas.height = h;
+        this.paintCtx.fillStyle = '#ffffff';
+        this.paintCtx.fillRect(0, 0, w, h);
+        this.paintCtx.drawImage(tmp, 0, 0);
 
         this.canvas.width  = w;
         this.canvas.height = h;
-        this.ctx.fillStyle = '#ffffff';
-        this.ctx.fillRect(0, 0, w, h);
-        this.ctx.drawImage(tmp, 0, 0);
+        this.render();
     }
 
-    /** 視窗縮放時，只有在「自動符合」模式下才重新計算尺寸 */
     private resizeCanvas(): void {
         if (this.manualWidth > 0 && this.manualHeight > 0) return;
         const w = Math.max(1, this.canvasWrapper.clientWidth);
@@ -315,66 +424,132 @@ class EasyNoteView extends ItemView {
         this.applyCanvasSize(w, h);
     }
 
-    /** 使用者手動設定畫布大小 */
     setCanvasSize(w: number, h: number): void {
         this.manualWidth  = w;
         this.manualHeight = h;
         this.applyCanvasSize(w, h);
     }
 
-    // ── 繪圖核心（移植自 GDScript _paint_dot_raw / _paint_stroke）────────────
+    // ── 合成渲染 ──────────────────────────────────────────────────────────────
 
-    /** 目前的繪圖顏色（擦子時為白色） */
+    private render(): void {
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        // 1. 白底
+        this.ctx.fillStyle = '#ffffff';
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+        // 2. 筆畫層
+        this.ctx.drawImage(this.paintCanvas, 0, 0);
+        // 3. 圖片圖層
+        for (const lay of this.imageLayers) {
+            this.ctx.drawImage(lay.img, lay.x, lay.y, lay.w, lay.h);
+        }
+        // 4. 選取框 & 控點
+        if (this.tool === 'select' && this.selectedIdx >= 0) {
+            this.drawSelectionHandles(this.imageLayers[this.selectedIdx]);
+        }
+    }
+
+    private drawSelectionHandles(lay: ImageLayer): void {
+        const { x, y, w, h } = lay;
+        // 虛線框
+        this.ctx.save();
+        this.ctx.strokeStyle = '#0066ff';
+        this.ctx.lineWidth   = 1.5;
+        this.ctx.setLineDash([5, 3]);
+        this.ctx.strokeRect(x, y, w, h);
+        this.ctx.restore();
+        // 四個角控點
+        for (const [cx, cy] of this.cornerPositions(lay)) {
+            this.ctx.fillStyle   = '#ffffff';
+            this.ctx.strokeStyle = '#0066ff';
+            this.ctx.lineWidth   = 1.5;
+            this.ctx.fillRect(cx - HANDLE_SIZE / 2, cy - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
+            this.ctx.strokeRect(cx - HANDLE_SIZE / 2, cy - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
+        }
+    }
+
+    private cornerPositions(lay: ImageLayer): [number, number][] {
+        return [
+            [lay.x,         lay.y        ],
+            [lay.x + lay.w, lay.y        ],
+            [lay.x,         lay.y + lay.h],
+            [lay.x + lay.w, lay.y + lay.h],
+        ];
+    }
+
+    private hitHandle(mx: number, my: number, lay: ImageLayer): HandleType | null {
+        const corners: [HandleType, number, number][] = [
+            ['nw', lay.x,         lay.y        ],
+            ['ne', lay.x + lay.w, lay.y        ],
+            ['sw', lay.x,         lay.y + lay.h],
+            ['se', lay.x + lay.w, lay.y + lay.h],
+        ];
+        const hs = HANDLE_SIZE;
+        for (const [type, cx, cy] of corners) {
+            if (mx >= cx - hs && mx <= cx + hs && my >= cy - hs && my <= cy + hs) return type;
+        }
+        return null;
+    }
+
+    private pointInLayer(mx: number, my: number, lay: ImageLayer): boolean {
+        return mx >= lay.x && mx <= lay.x + lay.w && my >= lay.y && my <= lay.y + lay.h;
+    }
+
+    private updateCursor(mx: number, my: number): void {
+        if (this.dragState) return;
+        if (this.selectedIdx >= 0) {
+            const h = this.hitHandle(mx, my, this.imageLayers[this.selectedIdx]);
+            if (h === 'nw' || h === 'se') { this.canvas.style.cursor = 'nwse-resize'; return; }
+            if (h === 'ne' || h === 'sw') { this.canvas.style.cursor = 'nesw-resize'; return; }
+        }
+        for (let i = this.imageLayers.length - 1; i >= 0; i--) {
+            if (this.pointInLayer(mx, my, this.imageLayers[i])) {
+                this.canvas.style.cursor = 'move'; return;
+            }
+        }
+        this.canvas.style.cursor = 'default';
+    }
+
+    // ── 繪圖核心 ──────────────────────────────────────────────────────────────
+
     private activeColor(): string {
         return this.eraser ? '#ffffff' : COLORS[this.colorIdx];
     }
 
-    /** 畫單點（對應 GDScript _paint_dot） */
     private paintDot(x: number, y: number): void {
-        this.ctx.beginPath();
-        this.ctx.arc(x, y, this.brushSize / 2, 0, Math.PI * 2);
-        this.ctx.fillStyle = this.activeColor();
-        this.ctx.fill();
+        this.paintCtx.beginPath();
+        this.paintCtx.arc(x, y, this.brushSize / 2, 0, Math.PI * 2);
+        this.paintCtx.fillStyle = this.activeColor();
+        this.paintCtx.fill();
+        this.render();
     }
 
-    /**
-     * 在兩點間插值連續筆觸（對應 GDScript _paint_stroke）
-     * 步長 = 筆刷半徑的 0.15 倍，確保筆觸連續
-     */
     private paintStroke(x1: number, y1: number, x2: number, y2: number): void {
         const dist  = Math.hypot(x2 - x1, y2 - y1);
         const step  = Math.max(1, this.brushSize * 0.15);
         const steps = Math.floor(dist / step);
         for (let i = 0; i <= steps; i++) {
             const t = steps > 0 ? i / steps : 0;
-            this.paintDot(x1 + (x2 - x1) * t, y1 + (y2 - y1) * t);
+            const x = x1 + (x2 - x1) * t;
+            const y = y1 + (y2 - y1) * t;
+            this.paintCtx.beginPath();
+            this.paintCtx.arc(x, y, this.brushSize / 2, 0, Math.PI * 2);
+            this.paintCtx.fillStyle = this.activeColor();
+            this.paintCtx.fill();
         }
+        this.render();
     }
 
-    /** 清除畫布（對應 GDScript _clear_canvas） */
     private clearCanvas(): void {
-        this.ctx.fillStyle = '#ffffff';
-        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+        this.paintCtx.fillStyle = '#ffffff';
+        this.paintCtx.fillRect(0, 0, this.paintCanvas.width, this.paintCanvas.height);
+        this.imageLayers = [];
+        this.selectedIdx = -1;
+        this.render();
     }
 
-    // ── 圖片載入 ─────────────────────────────────────────────────────────────
+    // ── 圖片載入（改為建立 ImageLayer）──────────────────────────────────────
 
-    /** 將 HTMLImageElement 繪製到畫布（等比縮放置中，不超過畫布尺寸） */
-    private drawImageOnCanvas(img: HTMLImageElement): void {
-        const cw = this.canvas.width;
-        const ch = this.canvas.height;
-        const scale = Math.min(cw / img.naturalWidth, ch / img.naturalHeight, 1);
-        const dw = img.naturalWidth  * scale;
-        const dh = img.naturalHeight * scale;
-        const dx = (cw - dw) / 2;
-        const dy = (ch - dh) / 2;
-        // 先以白色填底，再畫圖
-        this.ctx.fillStyle = '#ffffff';
-        this.ctx.fillRect(0, 0, cw, ch);
-        this.ctx.drawImage(img, dx, dy, dw, dh);
-    }
-
-    /** 從本機 File / Blob 載入圖片（用 FileReader 轉 base64，避免 Electron CSP 封鎖 blob URL）*/
     private loadImageFromBlob(blob: Blob): void {
         const reader = new FileReader();
         reader.onload = (e) => {
@@ -386,66 +561,102 @@ class EasyNoteView extends ItemView {
         reader.readAsDataURL(blob);
     }
 
-    /** 從 Vault TFile 載入圖片（用 getResourcePath，直接取 Obsidian 內部資源 URL）*/
     private loadImageFromVault(file: TFile): void {
-        const url = this.app.vault.getResourcePath(file);
-        this.loadImageFromUrl(url);
+        this.loadImageFromUrl(this.app.vault.getResourcePath(file));
     }
 
-    /** 共用：以 URL 建立 Image 並繪到畫布 */
     private loadImageFromUrl(url: string): void {
         const img = new Image();
-        img.onload  = () => this.drawImageOnCanvas(img);
+        img.onload = () => {
+            const cw = this.canvas.width;
+            const ch = this.canvas.height;
+            const scale = Math.min(cw / img.naturalWidth, ch / img.naturalHeight, 1);
+            const w = Math.round(img.naturalWidth  * scale);
+            const h = Math.round(img.naturalHeight * scale);
+            const x = Math.round((cw - w) / 2);
+            const y = Math.round((ch - h) / 2);
+            this.imageLayers.push({ img, x, y, w, h });
+            this.selectedIdx = this.imageLayers.length - 1;
+            this.setTool('select');   // 載入後自動切到選取模式
+            this.render();
+        };
         img.onerror = () => new Notice('EasyNote：圖片載入失敗');
         img.src = url;
     }
 
-    // ── 工具切換（對應 GDScript _set_color / _on_eraser_toggled）────────────
+    // ── 工具切換 ──────────────────────────────────────────────────────────────
+
+    private setTool(t: 'draw' | 'select'): void {
+        this.tool = t;
+        if (t === 'draw') {
+            this.canvas.style.cursor = 'crosshair';
+            this.selectBtn.removeClass('active');
+            this.eraserBtn.toggleClass('active', this.eraser);
+        } else {
+            this.canvas.style.cursor = 'default';
+            this.selectBtn.addClass('active');
+            this.eraserBtn.removeClass('active');
+        }
+        this.refreshStatus();
+    }
 
     private setColor(idx: number): void {
         this.colorIdx = idx;
         this.eraser   = false;
-        this.eraserBtn.removeClass('active');
+        this.setTool('draw');
         this.refreshColorBtns();
         this.refreshStatus();
     }
 
     private toggleEraser(): void {
         this.eraser = !this.eraser;
+        this.setTool('draw');
         this.eraserBtn.toggleClass('active', this.eraser);
         this.refreshColorBtns();
         this.refreshStatus();
     }
 
-    // ── UI 刷新（對應 GDScript _refresh_status） ─────────────────────────────
+    // ── UI 刷新 ───────────────────────────────────────────────────────────────
 
     private refreshColorBtns(): void {
         this.colorBtns.forEach((btn, i) => {
-            btn.toggleClass('active', i === this.colorIdx && !this.eraser);
+            btn.toggleClass('active', i === this.colorIdx && !this.eraser && this.tool === 'draw');
         });
     }
 
     private refreshStatus(): void {
-        const tool = this.eraser
-            ? '橡皮擦'
-            : `${COLOR_NAMES[this.colorIdx]} 鉛筆`;
-        this.statusLabel.textContent = `工具: ${tool} | 大小: ${this.brushSize}`;
+        if (this.tool === 'select') {
+            const n = this.imageLayers.length;
+            this.statusLabel.textContent = `選取模式 | 圖片: ${n} 張`;
+        } else {
+            const toolName = this.eraser ? '橡皮擦' : `${COLOR_NAMES[this.colorIdx]} 鉛筆`;
+            this.statusLabel.textContent = `工具: ${toolName} | 大小: ${this.brushSize}`;
+        }
     }
 
-    // ── 鍵盤快捷鍵（完整對應 GDScript match event.keycode）─────────────────
+    // ── 鍵盤快捷鍵 ───────────────────────────────────────────────────────────
     private handleKeyDown(e: KeyboardEvent): void {
-        // 只在此 View 為當前 active 時響應
         if (this.app.workspace.getActiveViewOfType(EasyNoteView) !== this) return;
-        // 不攔截輸入框的按鍵
         const tag = (e.target as HTMLElement)?.tagName;
         if (tag === 'INPUT' || tag === 'TEXTAREA') return;
 
         switch (e.key) {
+            case 's': case 'S':
+                this.setTool(this.tool === 'select' ? 'draw' : 'select');
+                break;
             case 'c': case 'C':
-                this.clearCanvas();
+                if (this.tool !== 'select') this.clearCanvas();
                 break;
             case 'e': case 'E':
                 this.toggleEraser();
+                break;
+            case 'Delete': case 'Backspace':
+                if (this.tool === 'select' && this.selectedIdx >= 0) {
+                    this.imageLayers.splice(this.selectedIdx, 1);
+                    this.selectedIdx = -1;
+                    this.render();
+                    this.refreshStatus();
+                }
                 break;
             case '1': this.setColor(0); break;
             case '2': this.setColor(1); break;
@@ -465,51 +676,49 @@ class EasyNoteView extends ItemView {
         }
     }
 
-    // ── 剪貼簿貼上（Ctrl+V / Snipping Tool）─────────────────────────────────
+    // ── 剪貼簿貼上 ───────────────────────────────────────────────────────────
     private handlePaste(e: ClipboardEvent): void {
-        // 只在此 View 為當前 active 時響應
         if (this.app.workspace.getActiveViewOfType(EasyNoteView) !== this) return;
-        // 不攔截輸入框內的貼上
         const tag = (e.target as HTMLElement)?.tagName;
         if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-
         const items = e.clipboardData?.items;
         if (!items) return;
-
         for (let i = 0; i < items.length; i++) {
             if (items[i].type.startsWith('image/')) {
                 const blob = items[i].getAsFile();
-                if (blob) {
-                    e.preventDefault();
-                    this.loadImageFromBlob(blob);
-                }
+                if (blob) { e.preventDefault(); this.loadImageFromBlob(blob); }
                 return;
             }
         }
     }
 
-    // ── 儲存至 Vault（Obsidian 特有功能）────────────────────────────────────
+    // ── 儲存至 Vault ──────────────────────────────────────────────────────────
     async saveDrawing(): Promise<void> {
         try {
             const folder = normalizePath(this.settings.saveFolder);
-
-            // 確保儲存資料夾存在
             if (!(await this.app.vault.adapter.exists(folder))) {
                 await this.app.vault.createFolder(folder);
             }
-
-            // 時間戳記檔名（避免覆蓋）
             const ts       = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
             const filename = normalizePath(`${folder}/EasyNote-${ts}.png`);
 
-            // canvas → PNG → ArrayBuffer
-            const dataUrl = this.canvas.toDataURL('image/png');
+            // 合成到暫存 canvas（去掉選取框線）
+            const tmp = document.createElement('canvas');
+            tmp.width  = this.canvas.width;
+            tmp.height = this.canvas.height;
+            const tc   = tmp.getContext('2d')!;
+            tc.fillStyle = '#ffffff';
+            tc.fillRect(0, 0, tmp.width, tmp.height);
+            tc.drawImage(this.paintCanvas, 0, 0);
+            for (const lay of this.imageLayers) {
+                tc.drawImage(lay.img, lay.x, lay.y, lay.w, lay.h);
+            }
+
+            const dataUrl = tmp.toDataURL('image/png');
             const base64  = dataUrl.split(',')[1];
             const binary  = atob(base64);
             const bytes   = new Uint8Array(binary.length);
-            for (let i = 0; i < binary.length; i++) {
-                bytes[i] = binary.charCodeAt(i);
-            }
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
 
             await this.app.vault.createBinary(filename, bytes.buffer);
             new Notice(`✓ 已儲存: ${filename}`);
