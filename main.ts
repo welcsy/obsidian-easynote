@@ -1,10 +1,12 @@
 import {
     App,
     ItemView,
+    Modal,
     Notice,
     Plugin,
     PluginSettingTab,
     Setting,
+    TFile,
     WorkspaceLeaf,
     normalizePath,
 } from 'obsidian';
@@ -58,6 +60,7 @@ class EasyNoteView extends ItemView {
     private eraserBtn!:   HTMLButtonElement;
     private sizeSlider!:  HTMLInputElement;
     private colorBtns:    HTMLElement[] = [];
+    private fileInput!:   HTMLInputElement;
 
     // 事件繫結（onClose 時解除）
     private _onKeyDown!: (e: KeyboardEvent) => void;
@@ -152,6 +155,38 @@ class EasyNoteView extends ItemView {
         });
         bar.createEl('div', { cls: 'easynote-sep' });
 
+        // 載入圖片 — 本機檔案
+        const loadBtn = bar.createEl('button', {
+            cls:   'easynote-btn',
+            text:  '載入圖片',
+            title: '從本機載入圖片到畫布（也可直接拖曳）',
+        });
+        loadBtn.addEventListener('click', () => this.fileInput.click());
+
+        // 隱藏的 file input（只接受圖片）
+        this.fileInput        = bar.createEl('input');
+        this.fileInput.type   = 'file';
+        this.fileInput.accept = 'image/*';
+        this.fileInput.style.display = 'none';
+        this.fileInput.addEventListener('change', () => {
+            const file = this.fileInput.files?.[0];
+            if (file) this.loadImageFromBlob(file);
+            this.fileInput.value = '';
+        });
+
+        // 從 Vault 選取圖片
+        const vaultBtn = bar.createEl('button', {
+            cls:   'easynote-btn',
+            text:  'Vault 圖片',
+            title: '從 Vault 中選取圖片載入畫布',
+        });
+        vaultBtn.addEventListener('click', () => {
+            new VaultImagePickerModal(this.app, (file) => {
+                this.loadImageFromVault(file);
+            }).open();
+        });
+        bar.createEl('div', { cls: 'easynote-sep' });
+
         // 儲存 PNG 至 Vault
         const saveBtn = bar.createEl('button', {
             cls:   'easynote-btn easynote-btn-save',
@@ -202,6 +237,32 @@ class EasyNoteView extends ItemView {
             this.sizeSlider.value = String(this.brushSize);
             this.refreshStatus();
         }, { passive: false });
+
+        // 拖曳圖片到畫布（本機檔案 或 Vault 路徑）
+        this.canvas.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            this.canvas.addClass('easynote-drag-over');
+        });
+        this.canvas.addEventListener('dragleave', () => {
+            this.canvas.removeClass('easynote-drag-over');
+        });
+        this.canvas.addEventListener('drop', (e) => {
+            e.preventDefault();
+            this.canvas.removeClass('easynote-drag-over');
+            // 優先處理本機檔案
+            const file = e.dataTransfer?.files?.[0];
+            if (file && file.type.startsWith('image/')) {
+                this.loadImageFromBlob(file);
+                return;
+            }
+            // 從 Obsidian 檔案總管拖入（plain text = vault 相對路徑）
+            const text = e.dataTransfer?.getData('text/plain').trim();
+            if (text) {
+                const vaultFile = this.app.vault.getFileByPath(normalizePath(text));
+                if (vaultFile) this.loadImageFromVault(vaultFile);
+                else new Notice(`EasyNote：找不到 Vault 檔案「${text}」`);
+            }
+        });
     }
 
     // ── Canvas 大小調整（保留已繪內容）──────────────────────────────────────
@@ -257,6 +318,49 @@ class EasyNoteView extends ItemView {
     private clearCanvas(): void {
         this.ctx.fillStyle = '#ffffff';
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    }
+
+    // ── 圖片載入 ─────────────────────────────────────────────────────────────
+
+    /** 將 HTMLImageElement 繪製到畫布（等比縮放置中，不超過畫布尺寸） */
+    private drawImageOnCanvas(img: HTMLImageElement): void {
+        const cw = this.canvas.width;
+        const ch = this.canvas.height;
+        const scale = Math.min(cw / img.naturalWidth, ch / img.naturalHeight, 1);
+        const dw = img.naturalWidth  * scale;
+        const dh = img.naturalHeight * scale;
+        const dx = (cw - dw) / 2;
+        const dy = (ch - dh) / 2;
+        // 先以白色填底，再畫圖
+        this.ctx.fillStyle = '#ffffff';
+        this.ctx.fillRect(0, 0, cw, ch);
+        this.ctx.drawImage(img, dx, dy, dw, dh);
+    }
+
+    /** 從本機 File / Blob 載入圖片（用 FileReader 轉 base64，避免 Electron CSP 封鎖 blob URL）*/
+    private loadImageFromBlob(blob: Blob): void {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const dataUrl = e.target?.result as string | null;
+            if (dataUrl) this.loadImageFromUrl(dataUrl);
+            else new Notice('EasyNote：圖片載入失敗');
+        };
+        reader.onerror = () => new Notice('EasyNote：圖片讀取失敗');
+        reader.readAsDataURL(blob);
+    }
+
+    /** 從 Vault TFile 載入圖片（用 getResourcePath，直接取 Obsidian 內部資源 URL）*/
+    private loadImageFromVault(file: TFile): void {
+        const url = this.app.vault.getResourcePath(file);
+        this.loadImageFromUrl(url);
+    }
+
+    /** 共用：以 URL 建立 Image 並繪到畫布 */
+    private loadImageFromUrl(url: string): void {
+        const img = new Image();
+        img.onload  = () => this.drawImageOnCanvas(img);
+        img.onerror = () => new Notice('EasyNote：圖片載入失敗');
+        img.src = url;
     }
 
     // ── 工具切換（對應 GDScript _set_color / _on_eraser_toggled）────────────
@@ -353,6 +457,71 @@ class EasyNoteView extends ItemView {
             new Notice(`✗ 儲存失敗: ${err}`);
             console.error('[EasyNote] saveDrawing error:', err);
         }
+    }
+}
+
+// ─── Vault 圖片選擇 Modal ──────────────────────────────────────────────────────
+class VaultImagePickerModal extends Modal {
+    private onChoose: (file: TFile) => void;
+    private searchInput!: HTMLInputElement;
+    private listEl!:      HTMLElement;
+
+    private static readonly IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'];
+
+    constructor(app: App, onChoose: (file: TFile) => void) {
+        super(app);
+        this.onChoose = onChoose;
+    }
+
+    onOpen(): void {
+        const { contentEl } = this;
+        contentEl.empty();
+        contentEl.createEl('h3', { text: '選擇 Vault 圖片' });
+
+        this.searchInput           = contentEl.createEl('input');
+        this.searchInput.type      = 'text';
+        this.searchInput.placeholder = '搜尋圖片檔名…';
+        this.searchInput.className = 'easynote-picker-search';
+        this.searchInput.addEventListener('input', () => this.renderList());
+
+        this.listEl = contentEl.createEl('div', { cls: 'easynote-picker-list' });
+        this.renderList();
+
+        // 開啟後自動聚焦搜尋框
+        setTimeout(() => this.searchInput.focus(), 50);
+    }
+
+    private renderList(): void {
+        const query = this.searchInput.value.toLowerCase();
+        this.listEl.empty();
+
+        const files = this.app.vault.getFiles().filter((f) => {
+            const ext = f.extension.toLowerCase();
+            return VaultImagePickerModal.IMAGE_EXTS.includes(ext)
+                && f.name.toLowerCase().includes(query);
+        });
+
+        if (files.length === 0) {
+            this.listEl.createEl('div', {
+                cls:  'easynote-picker-empty',
+                text: '找不到符合的圖片',
+            });
+            return;
+        }
+
+        for (const file of files) {
+            const item = this.listEl.createEl('div', { cls: 'easynote-picker-item' });
+            item.createEl('span', { cls: 'easynote-picker-name', text: file.name });
+            item.createEl('span', { cls: 'easynote-picker-path', text: file.path });
+            item.addEventListener('click', () => {
+                this.onChoose(file);
+                this.close();
+            });
+        }
+    }
+
+    onClose(): void {
+        this.contentEl.empty();
     }
 }
 

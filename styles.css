@@ -135,4 +135,68 @@
     background: #ffffff;
     /* 避免觸控裝置的預設捲動干擾 */
     touch-action: none;
+    transition: outline 0.1s;
+}
+
+/* 拖曳圖片進入時的提示框線 */
+.easynote-canvas.easynote-drag-over {
+    outline:        3px dashed var(--interactive-accent);
+    outline-offset: -3px;
+}
+
+/* ── Vault 圖片選擇 Modal ───────────────────────────────────────────────────── */
+
+.easynote-picker-search {
+    width:         100%;
+    padding:       6px 10px;
+    font-size:     14px;
+    border-radius: 6px;
+    border:        1px solid var(--background-modifier-border);
+    background:    var(--background-primary);
+    color:         var(--text-normal);
+    box-sizing:    border-box;
+    margin-bottom: 10px;
+}
+
+.easynote-picker-list {
+    max-height:   380px;
+    overflow-y:   auto;
+    border:       1px solid var(--background-modifier-border);
+    border-radius: 6px;
+}
+
+.easynote-picker-empty {
+    padding:   20px;
+    text-align: center;
+    color:      var(--text-muted);
+    font-size:  13px;
+}
+
+.easynote-picker-item {
+    display:        flex;
+    flex-direction: column;
+    padding:        8px 12px;
+    cursor:         pointer;
+    border-bottom:  1px solid var(--background-modifier-border);
+    transition:     background 0.1s;
+}
+
+.easynote-picker-item:last-child {
+    border-bottom: none;
+}
+
+.easynote-picker-item:hover {
+    background: var(--background-modifier-hover);
+}
+
+.easynote-picker-name {
+    font-size:   14px;
+    font-weight: 500;
+    color:       var(--text-normal);
+}
+
+.easynote-picker-path {
+    font-size: 11px;
+    color:     var(--text-muted);
+    margin-top: 2px;
 }
