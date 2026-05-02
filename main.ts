@@ -68,10 +68,14 @@ interface TextLayer {
 }
 
 interface TextDragState {
-    startMX: number;
-    startMY: number;
-    startX:  number;
-    startY:  number;
+    handle:        HandleType;
+    startMX:       number;
+    startMY:       number;
+    startX:        number;
+    startY:        number;
+    startFontSize: number;
+    startW:        number;
+    startH:        number;
 }
 
 /** 一小塊被「擷起」的繪畫內容，可經導動、縮放後再合并回繪畫層 */
@@ -486,12 +490,31 @@ class EasyNoteView extends ItemView {
                 for (let i = this.textLayers.length - 1; i >= 0; i--) {
                     if (this.pointInText(mx, my, this.textLayers[i])) { hitText = i; break; }
                 }
+                // 如已選取文字圖層，先檢查控點是否被點擊
+                if (this.selectedTextIdx >= 0) {
+                    const h = this.hitTextHandle(mx, my, this.textLayers[this.selectedTextIdx]);
+                    if (h) {
+                        const tl = this.textLayers[this.selectedTextIdx];
+                        const b  = this.textBBox(tl);
+                        this.textDragState = {
+                            handle: h, startMX: mx, startMY: my,
+                            startX: tl.x, startY: tl.y,
+                            startFontSize: tl.fontSize, startW: b.w, startH: b.h,
+                        };
+                        return;
+                    }
+                }
                 if (hitText >= 0) {
                     this.selectedTextIdx = hitText;
                     this.selectedIdx     = -1;
                     this.dragState       = null;
                     const tl = this.textLayers[hitText];
-                    this.textDragState = { startMX: mx, startMY: my, startX: tl.x, startY: tl.y };
+                    const b  = this.textBBox(tl);
+                    this.textDragState = {
+                        handle: 'move', startMX: mx, startMY: my,
+                        startX: tl.x, startY: tl.y,
+                        startFontSize: tl.fontSize, startW: b.w, startH: b.h,
+                    };
                     this.render();
                     return;
                 }
@@ -539,12 +562,39 @@ class EasyNoteView extends ItemView {
                 // 更新游標
                 this.updateCursor(mx, my);
 
-                // 文字拖曳
+                // 文字拖曳 / 縮放
                 if (this.textDragState && this.selectedTextIdx >= 0) {
-                    const td = this.textDragState;
-                    const tl = this.textLayers[this.selectedTextIdx];
-                    tl.x = td.startX + (mx - td.startMX);
-                    tl.y = td.startY + (my - td.startMY);
+                    const td  = this.textDragState;
+                    const tl  = this.textLayers[this.selectedTextIdx];
+                    const dx  = mx - td.startMX;
+                    const dy  = my - td.startMY;
+                    const MIN_FONT = 8;
+                    const minW     = td.startW * (MIN_FONT / td.startFontSize);
+
+                    if (td.handle === 'move') {
+                        tl.x = td.startX + dx;
+                        tl.y = td.startY + dy;
+                    } else if (td.handle === 'nw') {
+                        const nw    = Math.max(minW, td.startW - dx);
+                        const scale = nw / td.startW;
+                        tl.fontSize = Math.max(MIN_FONT, td.startFontSize * scale);
+                        tl.x = td.startX + (td.startW - nw);
+                        tl.y = td.startY + (td.startH - td.startH * scale);
+                    } else if (td.handle === 'ne') {
+                        const nw    = Math.max(minW, td.startW + dx);
+                        const scale = nw / td.startW;
+                        tl.fontSize = Math.max(MIN_FONT, td.startFontSize * scale);
+                        tl.y = td.startY + (td.startH - td.startH * scale);
+                    } else if (td.handle === 'sw') {
+                        const nw    = Math.max(minW, td.startW - dx);
+                        const scale = nw / td.startW;
+                        tl.fontSize = Math.max(MIN_FONT, td.startFontSize * scale);
+                        tl.x = td.startX + (td.startW - nw);
+                    } else { // se
+                        const nw    = Math.max(minW, td.startW + dx);
+                        const scale = nw / td.startW;
+                        tl.fontSize = Math.max(MIN_FONT, td.startFontSize * scale);
+                    }
                     this.render();
                     return;
                 }
@@ -918,6 +968,33 @@ class EasyNoteView extends ItemView {
         this.ctx.setLineDash([5, 3]);
         this.ctx.strokeRect(b.x - 2, b.y - 2, b.w + 4, b.h + 4);
         this.ctx.restore();
+        // 四個角控點
+        const hs = HANDLE_SIZE / 2;
+        for (const [cx, cy] of [[b.x, b.y], [b.x + b.w, b.y], [b.x, b.y + b.h], [b.x + b.w, b.y + b.h]] as [number, number][]) {
+            this.ctx.save();
+            this.ctx.setLineDash([]);
+            this.ctx.fillStyle   = '#ffffff';
+            this.ctx.strokeStyle = '#0066ff';
+            this.ctx.lineWidth   = 1.5;
+            this.ctx.fillRect(cx - hs, cy - hs, HANDLE_SIZE, HANDLE_SIZE);
+            this.ctx.strokeRect(cx - hs, cy - hs, HANDLE_SIZE, HANDLE_SIZE);
+            this.ctx.restore();
+        }
+    }
+
+    private hitTextHandle(mx: number, my: number, tl: TextLayer): HandleType | null {
+        const b  = this.textBBox(tl);
+        const hs = HANDLE_SIZE;
+        const corners: [HandleType, number, number][] = [
+            ['nw', b.x,       b.y      ],
+            ['ne', b.x + b.w, b.y      ],
+            ['sw', b.x,       b.y + b.h],
+            ['se', b.x + b.w, b.y + b.h],
+        ];
+        for (const [type, cx, cy] of corners) {
+            if (mx >= cx - hs && mx <= cx + hs && my >= cy - hs && my <= cy + hs) return type;
+        }
+        return null;
     }
 
     // ── 繪畫選取 helpers ──────────────────────────────────────────────────────
@@ -1007,6 +1084,12 @@ class EasyNoteView extends ItemView {
         if (this.dragState || this.textDragState) return;
         if (this.selectedIdx >= 0) {
             const h = this.hitHandle(mx, my, this.imageLayers[this.selectedIdx]);
+            if (h === 'nw' || h === 'se') { this.canvas.style.cursor = 'nwse-resize'; return; }
+            if (h === 'ne' || h === 'sw') { this.canvas.style.cursor = 'nesw-resize'; return; }
+        }
+        // 文字層控點
+        if (this.selectedTextIdx >= 0 && this.selectedTextIdx < this.textLayers.length) {
+            const h = this.hitTextHandle(mx, my, this.textLayers[this.selectedTextIdx]);
             if (h === 'nw' || h === 'se') { this.canvas.style.cursor = 'nwse-resize'; return; }
             if (h === 'ne' || h === 'sw') { this.canvas.style.cursor = 'nesw-resize'; return; }
         }
