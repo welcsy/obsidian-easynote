@@ -412,13 +412,16 @@ class EasyNoteView extends ItemView {
         });
         row2.createEl('div', { cls: 'easynote-sep' });
 
-        // 儲存 PNG
+        // 儲存檔案
         const saveBtn = row2.createEl('button', {
             cls:   'easynote-btn easynote-btn-save',
-            text:  '儲存 PNG',
-            title: '將手繪圖儲存為 PNG 到 Vault',
+            text:  '儲存檔案',
+            title: '將手繪圖儲存到 Vault',
         });
-        saveBtn.addEventListener('click', () => this.saveDrawing());
+        saveBtn.addEventListener('click', () => {
+            const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+            new SaveModal(this.app, `EasyNote-${ts}`, (name, fmt) => this.saveDrawing(name, fmt)).open();
+        });
 
         row2.createEl('div', { cls: 'easynote-spacer' });
         this.statusLabel = row2.createEl('span', { cls: 'easynote-status' });
@@ -1451,14 +1454,14 @@ class EasyNoteView extends ItemView {
     }
 
     // ── 儲存至 Vault ──────────────────────────────────────────────────────────
-    async saveDrawing(): Promise<void> {
+    async saveDrawing(baseName: string, fmt: 'png' | 'jpeg' | 'webp'): Promise<void> {
         try {
             const folder = normalizePath(this.settings.saveFolder);
             if (!(await this.app.vault.adapter.exists(folder))) {
                 await this.app.vault.createFolder(folder);
             }
-            const ts       = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-            const filename = normalizePath(`${folder}/EasyNote-${ts}.png`);
+            const ext      = fmt === 'jpeg' ? 'jpg' : fmt;
+            const filename = normalizePath(`${folder}/${baseName}.${ext}`);
 
             // 合成到暫存 canvas（去掉選取框線）
             const tmp = document.createElement('canvas');
@@ -1492,7 +1495,8 @@ class EasyNoteView extends ItemView {
                 tc.drawImage(f.offscreen, 0, 0, f.offscreen.width, f.offscreen.height, f.x, f.y, f.w, f.h);
             }
 
-            const dataUrl = tmp.toDataURL('image/png');
+            const quality = fmt === 'png' ? undefined : 0.92;
+            const dataUrl = tmp.toDataURL(`image/${fmt}`, quality);
             const base64  = dataUrl.split(',')[1];
             const binary  = atob(base64);
             const bytes   = new Uint8Array(binary.length);
@@ -1505,6 +1509,70 @@ class EasyNoteView extends ItemView {
             console.error('[EasyNote] saveDrawing error:', err);
         }
     }
+}
+
+// ─── 儲存 Modal ──────────────────────────────────────────────────────────────
+class SaveModal extends Modal {
+    private defaultName: string;
+    private onSave: (name: string, fmt: 'png' | 'jpeg' | 'webp') => void;
+
+    constructor(app: App, defaultName: string, onSave: (name: string, fmt: 'png' | 'jpeg' | 'webp') => void) {
+        super(app);
+        this.defaultName = defaultName;
+        this.onSave      = onSave;
+    }
+
+    onOpen(): void {
+        const { contentEl } = this;
+        contentEl.empty();
+        contentEl.createEl('h3', { text: '儲存圖片' });
+
+        // 檔案名稱
+        new Setting(contentEl)
+            .setName('檔案名稱')
+            .setDesc('不需要加副檔名')
+            .addText((t) => {
+                t.setValue(this.defaultName);
+                t.inputEl.style.width = '100%';
+                t.onChange((v) => { this.defaultName = v.trim() || this.defaultName; });
+                // 選取全部文字便於快速修改
+                setTimeout(() => { t.inputEl.select(); t.inputEl.focus(); }, 30);
+            });
+
+        // 格式選擇
+        let fmt: 'png' | 'jpeg' | 'webp' = 'png';
+        new Setting(contentEl)
+            .setName('檔案格式')
+            .addDropdown((d) => {
+                d.addOption('png',  'PNG（無損，支援透明）');
+                d.addOption('jpeg', 'JPG（較小，不透明）');
+                d.addOption('webp', 'WebP（高壓縮，支援透明）');
+                d.setValue('png');
+                d.onChange((v) => { fmt = v as 'png' | 'jpeg' | 'webp'; });
+            });
+
+        // 確認 / 取消
+        const btnRow = contentEl.createEl('div', { cls: 'easynote-size-btnrow' });
+        const saveBtn = btnRow.createEl('button', {
+            cls:  'easynote-btn easynote-btn-save',
+            text: '儲存',
+        });
+        saveBtn.addEventListener('click', () => {
+            if (!this.defaultName) return;
+            this.onSave(this.defaultName, fmt);
+            this.close();
+        });
+        const cancelBtn = btnRow.createEl('button', { cls: 'easynote-btn', text: '取消' });
+        cancelBtn.addEventListener('click', () => this.close());
+
+        // Enter 確認
+        contentEl.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { saveBtn.click(); e.preventDefault(); }
+            if (e.key === 'Escape') { this.close(); e.preventDefault(); }
+        });
+    }
+
+    onClose(): void { this.contentEl.empty(); }
 }
 
 // ─── 畫布大小設定 Modal ───────────────────────────────────────────────────────
