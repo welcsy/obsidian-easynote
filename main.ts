@@ -32,11 +32,13 @@ interface EasyNoteSettings {
     defaultColorIdx:  number;
     defaultBrushSize: number;
     saveFolder:       string;
+    defaultColors:    string[];
 }
 const DEFAULT_SETTINGS: EasyNoteSettings = {
     defaultColorIdx:  0,
     defaultBrushSize: 6,
     saveFolder:       'EasyNote',
+    defaultColors:    [...COLORS],
 };
 
 interface ImageLayer {
@@ -173,6 +175,8 @@ class EasyNoteView extends ItemView {
     async onOpen(): Promise<void> {
         this.brushSize        = this.settings.defaultBrushSize;
         this.colorIdx           = this.settings.defaultColorIdx;
+        this.colors             = [...(this.settings.defaultColors ?? COLORS)];
+        this.colorNames         = [...COLOR_NAMES];
         this.eraser             = false;
         this.tool               = 'draw';
         this.imageLayers        = [];
@@ -211,16 +215,18 @@ class EasyNoteView extends ItemView {
 
     // ── 工具列建構 ────────────────────────────────────────────────────────────
     private buildToolbar(root: HTMLElement): void {
-        const bar = root.createEl('div', { cls: 'easynote-toolbar' });
+        const bar  = root.createEl('div', { cls: 'easynote-toolbar' });
+        const row1 = bar.createEl('div',  { cls: 'easynote-toolbar-row' });
+        const row2 = bar.createEl('div',  { cls: 'easynote-toolbar-row' });
 
-        bar.createEl('span', { cls: 'easynote-title', text: '✏ EasyNote' });
-        bar.createEl('div',  { cls: 'easynote-sep'  });
+        row1.createEl('span', { cls: 'easynote-title', text: '✏ EasyNote' });
+        row1.createEl('div',  { cls: 'easynote-sep'  });
 
         // 色彩按鈕（單擊選色 / 雙擊開啟顏色選擇器 快捷 1~5）
-        bar.createEl('span', { cls: 'easynote-label', text: '顏色:' });
+        row1.createEl('span', { cls: 'easynote-label', text: '顏色:' });
         this.colorBtns = [];
         for (let i = 0; i < this.colors.length; i++) {
-            const wrapper = bar.createEl('div', { cls: 'easynote-color-wrapper' });
+            const wrapper = row1.createEl('div', { cls: 'easynote-color-wrapper' });
 
             const btn = wrapper.createEl('div', {
                 cls:   'easynote-color-btn',
@@ -272,10 +278,10 @@ class EasyNoteView extends ItemView {
 
             this.colorBtns.push(btn);
         }
-        bar.createEl('div', { cls: 'easynote-sep' });
+        row1.createEl('div', { cls: 'easynote-sep' });
 
         // 橡皮擦（快捷 E）
-        this.eraserBtn = bar.createEl('button', {
+        this.eraserBtn = row1.createEl('button', {
             cls:   'easynote-btn',
             text:  '橡皮擦 (E)',
             title: '切換橡皮擦（快捷：E）',
@@ -283,7 +289,7 @@ class EasyNoteView extends ItemView {
         this.eraserBtn.addEventListener('click', () => this.toggleEraser());
 
         // 選取工具（快捷 S）
-        this.selectBtn = bar.createEl('button', {
+        this.selectBtn = row1.createEl('button', {
             cls:   'easynote-btn',
             text:  '選取 (S)',
             title: '選取並移動/縮放圖片（快捷：S）\nDel 刪除選取圖片',
@@ -291,7 +297,7 @@ class EasyNoteView extends ItemView {
         this.selectBtn.addEventListener('click', () => this.setTool('select'));
 
         // 文字工具（快捷 T）
-        this.textBtn = bar.createEl('button', {
+        this.textBtn = row1.createEl('button', {
             cls:   'easynote-btn',
             text:  '文字 (T)',
             title: '新增 / 編輯文字（快捷：T）',
@@ -299,8 +305,8 @@ class EasyNoteView extends ItemView {
         this.textBtn.addEventListener('click', () => this.setTool('text'));
 
         // 字體大小
-        bar.createEl('span', { cls: 'easynote-label', text: '字體:' });
-        this.fontSizeInput           = bar.createEl('input');
+        row1.createEl('span', { cls: 'easynote-label', text: '字體:' });
+        this.fontSizeInput           = row1.createEl('input');
         this.fontSizeInput.type      = 'number';
         this.fontSizeInput.min       = '8';
         this.fontSizeInput.max       = '200';
@@ -320,7 +326,7 @@ class EasyNoteView extends ItemView {
         });
 
         // 繪畫選取工具（快捷 M）
-        this.paintSelectBtn = bar.createEl('button', {
+        this.paintSelectBtn = row1.createEl('button', {
             cls:   'easynote-btn',
             text:  '選取繪畫 (M)',
             title: '框選繪畫層區塊，可移動/縮放後再合併（快捷：M）\nEnter 確認　Esc 取消　Del 刪除選取區塊',
@@ -328,17 +334,17 @@ class EasyNoteView extends ItemView {
         this.paintSelectBtn.addEventListener('click', () => this.setTool('paintselect'));
 
         // 清除畫布（快捷 C）
-        const clearBtn = bar.createEl('button', {
+        const clearBtn = row1.createEl('button', {
             cls:   'easynote-btn',
             text:  '清除 (C)',
             title: '清除整個畫布（快捷：C）',
         });
         clearBtn.addEventListener('click', () => this.clearCanvas());
-        bar.createEl('div', { cls: 'easynote-sep' });
 
+        // ── 第二行 ──────────────────────────────────────────────────────────
         // 筆刷滑桿
-        bar.createEl('span', { cls: 'easynote-label', text: '筆刷:' });
-        this.sizeSlider           = bar.createEl('input');
+        row2.createEl('span', { cls: 'easynote-label', text: '筆刷:' });
+        this.sizeSlider           = row2.createEl('input');
         this.sizeSlider.type      = 'range';
         this.sizeSlider.min       = String(MIN_BRUSH_SIZE);
         this.sizeSlider.max       = String(MAX_BRUSH_SIZE);
@@ -351,8 +357,8 @@ class EasyNoteView extends ItemView {
         });
 
         // 透明度滑桿
-        bar.createEl('span', { cls: 'easynote-label', text: '透明度:' });
-        this.opacitySlider           = bar.createEl('input');
+        row2.createEl('span', { cls: 'easynote-label', text: '透明度:' });
+        this.opacitySlider           = row2.createEl('input');
         this.opacitySlider.type      = 'range';
         this.opacitySlider.min       = '1';
         this.opacitySlider.max       = '100';
@@ -363,17 +369,17 @@ class EasyNoteView extends ItemView {
             this.brushOpacity = parseInt(this.opacitySlider.value) / 100;
             this.refreshStatus();
         });
-        bar.createEl('div', { cls: 'easynote-sep' });
+        row2.createEl('div', { cls: 'easynote-sep' });
 
         // 載入圖片 — 本機檔案
-        const loadBtn = bar.createEl('button', {
+        const loadBtn = row2.createEl('button', {
             cls:   'easynote-btn',
             text:  '載入圖片',
             title: '從本機載入圖片（也可拖曳或 Ctrl+V）',
         });
         loadBtn.addEventListener('click', () => this.fileInput.click());
 
-        this.fileInput        = bar.createEl('input');
+        this.fileInput        = row2.createEl('input');
         this.fileInput.type   = 'file';
         this.fileInput.accept = 'image/*';
         this.fileInput.style.display = 'none';
@@ -384,7 +390,7 @@ class EasyNoteView extends ItemView {
         });
 
         // 從 Vault 選取圖片
-        const vaultBtn = bar.createEl('button', {
+        const vaultBtn = row2.createEl('button', {
             cls:   'easynote-btn',
             text:  'Vault 圖片',
             title: '從 Vault 中選取圖片',
@@ -392,10 +398,10 @@ class EasyNoteView extends ItemView {
         vaultBtn.addEventListener('click', () => {
             new VaultImagePickerModal(this.app, (file) => this.loadImageFromVault(file)).open();
         });
-        bar.createEl('div', { cls: 'easynote-sep' });
+        row2.createEl('div', { cls: 'easynote-sep' });
 
         // 畫布大小
-        const canvasSizeBtn = bar.createEl('button', {
+        const canvasSizeBtn = row2.createEl('button', {
             cls:   'easynote-btn',
             text:  '畫布大小',
             title: '調整畫布尺寸（現有內容保留）',
@@ -404,18 +410,18 @@ class EasyNoteView extends ItemView {
             new CanvasSizeModal(this.app, this.canvas.width, this.canvas.height,
                 (w, h) => this.setCanvasSize(w, h)).open();
         });
-        bar.createEl('div', { cls: 'easynote-sep' });
+        row2.createEl('div', { cls: 'easynote-sep' });
 
         // 儲存 PNG
-        const saveBtn = bar.createEl('button', {
+        const saveBtn = row2.createEl('button', {
             cls:   'easynote-btn easynote-btn-save',
             text:  '儲存 PNG',
             title: '將手繪圖儲存為 PNG 到 Vault',
         });
         saveBtn.addEventListener('click', () => this.saveDrawing());
 
-        bar.createEl('div', { cls: 'easynote-spacer' });
-        this.statusLabel = bar.createEl('span', { cls: 'easynote-status' });
+        row2.createEl('div', { cls: 'easynote-spacer' });
+        this.statusLabel = row2.createEl('span', { cls: 'easynote-status' });
     }
 
     // ── Canvas 建構 ───────────────────────────────────────────────────────────
@@ -1795,6 +1801,25 @@ class EasyNoteSettingTab extends PluginSettingTab {
                         await this.plugin.saveSettings();
                     })
             );
+
+        // 預設五色筆顏色
+        containerEl.createEl('h3', { text: '預設五色筆顏色' });
+        const colorLabels = ['顏色 1（黑）', '顏色 2（紅）', '顏色 3（藍）', '顏色 4（綠）', '顏色 5（橘）'];
+        const defaults = this.plugin.settings.defaultColors ?? [...COLORS];
+        for (let i = 0; i < 5; i++) {
+            new Setting(containerEl)
+                .setName(colorLabels[i])
+                .addColorPicker((picker) => {
+                    picker.setValue(defaults[i] ?? COLORS[i]);
+                    picker.onChange(async (value) => {
+                        if (!this.plugin.settings.defaultColors) {
+                            this.plugin.settings.defaultColors = [...COLORS];
+                        }
+                        this.plugin.settings.defaultColors[i] = value;
+                        await this.plugin.saveSettings();
+                    });
+                });
+        }
 
         // 儲存資料夾
         new Setting(containerEl)

@@ -12,17 +12,28 @@
 /* 工具列 */
 .easynote-toolbar {
     display:          flex;
-    align-items:      center;
-    gap:              6px;
-    padding:          0 12px;
-    height:           52px;
+    flex-direction:   column;
     background:       var(--background-secondary);
     border-bottom:    1px solid var(--background-modifier-border);
     flex-shrink:      0;
-    overflow-x:       auto;
-    overflow-y:       hidden;
-    white-space:      nowrap;
     box-sizing:       border-box;
+}
+
+/* 每一行 */
+.easynote-toolbar-row {
+    display:        flex;
+    align-items:    center;
+    gap:            6px;
+    padding:        0 12px;
+    height:         36px;
+    overflow-x:     auto;
+    overflow-y:     hidden;
+    white-space:    nowrap;
+    box-sizing:     border-box;
+}
+
+.easynote-toolbar-row + .easynote-toolbar-row {
+    border-top: 1px solid var(--background-modifier-border);
 }
 
 /* 彈性空隙（讓狀態列靠右） */
@@ -188,7 +199,23 @@
 .easynote-canvas-wrapper {
     flex:       1;
     overflow:   auto;
-    background: #e0e0e0;  /* 灰底讓畫布邊界明顯 */
+    background: #1e1e1e;
+}
+
+/* 捲軸樣式（淺灰，深淺色 Obsidian 主題皆適用） */
+.easynote-canvas-wrapper::-webkit-scrollbar {
+    width:  5px;
+    height: 5px;
+}
+.easynote-canvas-wrapper::-webkit-scrollbar-track {
+    background: #555555;
+}
+.easynote-canvas-wrapper::-webkit-scrollbar-thumb {
+    background:    #e0e0e0;
+    border-radius: 3px;
+}
+.easynote-canvas-wrapper::-webkit-scrollbar-thumb:hover {
+    background: #ffffff;
 }
 
 /* 畫布本體：十字鼠標，大小由 JS 控制 */
