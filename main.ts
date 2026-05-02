@@ -74,6 +74,15 @@ interface TextDragState {
     startY:  number;
 }
 
+/** 一小塊被「擷起」的繪畫內容，可經導動、縮放後再合并回繪畫層 */
+interface PaintFragment {
+    offscreen: HTMLCanvasElement;  // 提取的原始畫素
+    x:  number;                    // 目前畫布上 X
+    y:  number;
+    w:  number;                    // 目前寬度（可被縮放）
+    h:  number;
+}
+
 // ─── 繪圖面板（ItemView）──────────────────────────────────────────────────────
 class EasyNoteView extends ItemView {
     private settings: EasyNoteSettings;
@@ -103,8 +112,15 @@ class EasyNoteView extends ItemView {
         el: HTMLTextAreaElement; layerIdx: number; x: number; y: number;
     } | null = null;
 
+    // 繪畫選取（paintselect）
+    private paintFragment:    PaintFragment | null = null;
+    private paintFragDrag:    DragState     | null = null;
+    private selStart:         { x: number; y: number } | null = null;
+    private selCurrent:       { x: number; y: number } | null = null;
+    private paintSelectBtn!:  HTMLButtonElement;
+
     // 工具模式
-    private tool:       'draw' | 'select' | 'text' = 'draw';
+    private tool:       'draw' | 'select' | 'text' | 'paintselect' = 'draw';
     private drawing     = false;
     private prevX       = 0;
     private prevY       = 0;
@@ -117,11 +133,11 @@ class EasyNoteView extends ItemView {
     private colorNames: string[] = [...COLOR_NAMES];
 
     // 工具列 DOM
-    private statusLabel!: HTMLSpanElement;
-    private eraserBtn!:   HTMLButtonElement;
-    private selectBtn!:   HTMLButtonElement;
-    private textBtn!:     HTMLButtonElement;
-    private fontSizeInput!: HTMLInputElement;
+    private statusLabel!:     HTMLSpanElement;
+    private eraserBtn!:       HTMLButtonElement;
+    private selectBtn!:       HTMLButtonElement;
+    private textBtn!:         HTMLButtonElement;
+    private fontSizeInput!:   HTMLInputElement;
     private sizeSlider!:    HTMLInputElement;
     private opacitySlider!: HTMLInputElement;
     private colorBtns:    HTMLElement[] = [];
@@ -183,6 +199,7 @@ class EasyNoteView extends ItemView {
 
     async onClose(): Promise<void> {
         if (this._textEditing) { this._textEditing.el.remove(); this._textEditing = null; }
+        if (this.paintFragment) this.commitFragment();
         document.removeEventListener('keydown', this._onKeyDown);
         document.removeEventListener('paste',   this._onPaste);
         window.removeEventListener('resize',    this._onResize);
@@ -297,6 +314,14 @@ class EasyNoteView extends ItemView {
                 }
             }
         });
+
+        // 繪畫選取工具（快捷 M）
+        this.paintSelectBtn = bar.createEl('button', {
+            cls:   'easynote-btn',
+            text:  '選取繪畫 (M)',
+            title: '框選繪畫層區塊，可移動/縮放後再合併（快捷：M）\nEnter 確認　Esc 取消　Del 刪除選取區塊',
+        });
+        this.paintSelectBtn.addEventListener('click', () => this.setTool('paintselect'));
 
         // 清除畫布（快捷 C）
         const clearBtn = bar.createEl('button', {
@@ -428,6 +453,33 @@ class EasyNoteView extends ItemView {
                     if (this.pointInText(mx, my, this.textLayers[i])) { hitTextIdx = i; break; }
                 }
                 this.openTextEditor(mx, my, hitTextIdx);
+            } else if (this.tool === 'paintselect') {
+                if (this.paintFragment) {
+                    // 有 fragment：檢查控點 / 內部變鑑 / 外部 confirm
+                    const h = this.hitFragHandle(mx, my);
+                    if (h) {
+                        this.paintFragDrag = {
+                            handle: h, startMX: mx, startMY: my,
+                            startX: this.paintFragment.x, startY: this.paintFragment.y,
+                            startW: this.paintFragment.w, startH: this.paintFragment.h,
+                        };
+                    } else if (this.pointInFrag(mx, my)) {
+                        this.paintFragDrag = {
+                            handle: 'move', startMX: mx, startMY: my,
+                            startX: this.paintFragment.x, startY: this.paintFragment.y,
+                            startW: this.paintFragment.w, startH: this.paintFragment.h,
+                        };
+                    } else {
+                        // 點選外部 → 先確認当前再開始新選框
+                        this.commitFragment();
+                        this.selStart   = { x: mx, y: my };
+                        this.selCurrent = { x: mx, y: my };
+                    }
+                } else {
+                    // 開始拖曳新選框
+                    this.selStart   = { x: mx, y: my };
+                    this.selCurrent = { x: mx, y: my };
+                }
             } else if (this.tool === 'select') {
                 // 先檢查文字圖層（文字層在繪畫層下方）
                 let hitText = -1;
@@ -559,13 +611,71 @@ class EasyNoteView extends ItemView {
             } else if (this.drawing) {
                 this.paintStroke(this.prevX, this.prevY, mx, my);
                 this.prevX = mx; this.prevY = my;
+            } else if (this.tool === 'paintselect') {
+                if (this.paintFragDrag && this.paintFragment) {
+                    const ds    = this.paintFragDrag;
+                    const dx    = mx - ds.startMX;
+                    const dy    = my - ds.startMY;
+                    const frag  = this.paintFragment;
+                    const ratio = ds.startW / ds.startH;
+                    const MIN   = 10;
+                    if (ds.handle === 'move') {
+                        frag.x = ds.startX + dx;
+                        frag.y = ds.startY + dy;
+                    } else if (ds.handle === 'nw') {
+                        let nw = Math.max(MIN, ds.startW - dx);
+                        let nh = Math.max(MIN, ds.startH - dy);
+                        if (e.shiftKey) { const sc = Math.max((ds.startW-dx)/ds.startW,(ds.startH-dy)/ds.startH); nw=Math.max(MIN,ds.startW*sc); nh=nw/ratio; }
+                        frag.x = ds.startX + (ds.startW - nw); frag.y = ds.startY + (ds.startH - nh); frag.w = nw; frag.h = nh;
+                    } else if (ds.handle === 'ne') {
+                        let nw = Math.max(MIN, ds.startW + dx);
+                        let nh = Math.max(MIN, ds.startH - dy);
+                        if (e.shiftKey) { const sc = Math.max((ds.startW+dx)/ds.startW,(ds.startH-dy)/ds.startH); nw=Math.max(MIN,ds.startW*sc); nh=nw/ratio; }
+                        frag.w = nw; frag.y = ds.startY + (ds.startH - nh); frag.h = nh;
+                    } else if (ds.handle === 'sw') {
+                        let nw = Math.max(MIN, ds.startW - dx);
+                        let nh = Math.max(MIN, ds.startH + dy);
+                        if (e.shiftKey) { const sc = Math.max((ds.startW-dx)/ds.startW,(ds.startH+dy)/ds.startH); nw=Math.max(MIN,ds.startW*sc); nh=nw/ratio; }
+                        frag.x = ds.startX + (ds.startW - nw); frag.w = nw; frag.h = nh;
+                    } else { // se
+                        let nw = Math.max(MIN, ds.startW + dx);
+                        let nh = Math.max(MIN, ds.startH + dy);
+                        if (e.shiftKey) { const sc = Math.max((ds.startW+dx)/ds.startW,(ds.startH+dy)/ds.startH); nw=Math.max(MIN,ds.startW*sc); nh=nw/ratio; }
+                        frag.w = nw; frag.h = nh;
+                    }
+                    this.render();
+                } else if (this.selStart) {
+                    this.selCurrent = { x: mx, y: my };
+                    this.render();
+                } else {
+                    // 更新游標
+                    if (this.hitFragHandle(mx, my)) {
+                        this.canvas.style.cursor = 'nwse-resize';
+                    } else if (this.pointInFrag(mx, my)) {
+                        this.canvas.style.cursor = 'move';
+                    } else {
+                        this.canvas.style.cursor = 'crosshair';
+                    }
+                }
             }
+
         });
 
         this.canvas.addEventListener('mouseup', (e) => {
             if (e.button === 1) {
                 this.isPanning = false;
-                this.canvas.style.cursor = this.tool === 'draw' ? 'crosshair' : (this.tool === 'text' ? 'text' : 'default');
+                this.canvas.style.cursor = this.tool === 'draw' ? 'crosshair' : (this.tool === 'text' ? 'text' : (this.tool === 'paintselect' ? 'crosshair' : 'default'));
+                return;
+            }
+            if (this.tool === 'paintselect') {
+                if (this.selStart) {
+                    const rect = this.getSelRect();
+                    if (rect) this.extractFragment(rect);
+                    this.selStart   = null;
+                    this.selCurrent = null;
+                    if (!rect) this.render();
+                }
+                this.paintFragDrag = null;
                 return;
             }
             this.drawing       = false;
@@ -577,6 +687,8 @@ class EasyNoteView extends ItemView {
             this.drawing       = false;
             this.dragState     = null;
             this.textDragState = null;
+            this.paintFragDrag = null;
+            if (this.selStart) { this.selStart = null; this.selCurrent = null; this.render(); }
         });
 
         // 雙擊選取模式下編輯文字
@@ -703,6 +815,11 @@ class EasyNoteView extends ItemView {
         }
         // 4. 繪畫層（最上方）
         this.ctx.drawImage(this.paintCanvas, 0, 0);
+        // 4a. 繪畫選取 fragment（繪畫層上方）
+        if (this.paintFragment) {
+            const f = this.paintFragment;
+            this.ctx.drawImage(f.offscreen, 0, 0, f.offscreen.width, f.offscreen.height, f.x, f.y, f.w, f.h);
+        }
         // 5. 選取框 & 控點
         if (this.tool === 'select') {
             if (this.selectedIdx >= 0) {
@@ -710,6 +827,25 @@ class EasyNoteView extends ItemView {
             }
             if (this.selectedTextIdx >= 0 && this.selectedTextIdx < this.textLayers.length) {
                 this.drawTextSelectionBox(this.textLayers[this.selectedTextIdx]);
+            }
+        }
+        // 6. 繪畫選取工具的選框 / fragment 控點
+        if (this.tool === 'paintselect') {
+            if (this.selStart && this.selCurrent) {
+                const r = this.getSelRect();
+                if (r) {
+                    this.ctx.save();
+                    this.ctx.strokeStyle = '#ff6600';
+                    this.ctx.lineWidth   = 1.5;
+                    this.ctx.setLineDash([5, 3]);
+                    this.ctx.fillStyle   = 'rgba(255,102,0,0.08)';
+                    this.ctx.fillRect(r.x, r.y, r.w, r.h);
+                    this.ctx.strokeRect(r.x, r.y, r.w, r.h);
+                    this.ctx.restore();
+                }
+            }
+            if (this.paintFragment) {
+                this.drawFragmentHandles(this.paintFragment);
             }
         }
     }
@@ -782,6 +918,89 @@ class EasyNoteView extends ItemView {
         this.ctx.setLineDash([5, 3]);
         this.ctx.strokeRect(b.x - 2, b.y - 2, b.w + 4, b.h + 4);
         this.ctx.restore();
+    }
+
+    // ── 繪畫選取 helpers ──────────────────────────────────────────────────────
+
+    private getSelRect(): { x: number; y: number; w: number; h: number } | null {
+        if (!this.selStart || !this.selCurrent) return null;
+        const x = Math.round(Math.min(this.selStart.x, this.selCurrent.x));
+        const y = Math.round(Math.min(this.selStart.y, this.selCurrent.y));
+        const w = Math.round(Math.abs(this.selCurrent.x - this.selStart.x));
+        const h = Math.round(Math.abs(this.selCurrent.y - this.selStart.y));
+        return w > 2 && h > 2 ? { x, y, w, h } : null;
+    }
+
+    private extractFragment(r: { x: number; y: number; w: number; h: number }): void {
+        const offscreen      = document.createElement('canvas');
+        offscreen.width      = r.w;
+        offscreen.height     = r.h;
+        offscreen.getContext('2d')!.drawImage(this.paintCanvas, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
+        // 從 paintCanvas 挖除選取區
+        this.paintCtx.save();
+        this.paintCtx.globalCompositeOperation = 'destination-out';
+        this.paintCtx.fillStyle = 'rgba(0,0,0,1)';
+        this.paintCtx.fillRect(r.x, r.y, r.w, r.h);
+        this.paintCtx.restore();
+        this.paintFragment = { offscreen, x: r.x, y: r.y, w: r.w, h: r.h };
+        this.render();
+    }
+
+    private commitFragment(): void {
+        if (!this.paintFragment) return;
+        const f = this.paintFragment;
+        this.paintCtx.drawImage(f.offscreen, 0, 0, f.offscreen.width, f.offscreen.height, f.x, f.y, f.w, f.h);
+        this.paintFragment = null;
+        this.paintFragDrag = null;
+        this.render();
+    }
+
+    private cancelFragment(): void {
+        // 將 fragment 放回目前位置（不保留浮動狀態）
+        this.commitFragment();
+    }
+
+    private hitFragHandle(mx: number, my: number): HandleType | null {
+        if (!this.paintFragment) return null;
+        const { x, y, w, h } = this.paintFragment;
+        const hs = HANDLE_SIZE;
+        const corners: [HandleType, number, number][] = [
+            ['nw', x,     y    ],
+            ['ne', x + w, y    ],
+            ['sw', x,     y + h],
+            ['se', x + w, y + h],
+        ];
+        for (const [type, cx, cy] of corners) {
+            if (mx >= cx - hs && mx <= cx + hs && my >= cy - hs && my <= cy + hs) return type;
+        }
+        return null;
+    }
+
+    private pointInFrag(mx: number, my: number): boolean {
+        if (!this.paintFragment) return false;
+        const { x, y, w, h } = this.paintFragment;
+        return mx >= x && mx <= x + w && my >= y && my <= y + h;
+    }
+
+    private drawFragmentHandles(frag: PaintFragment): void {
+        const { x, y, w, h } = frag;
+        this.ctx.save();
+        this.ctx.strokeStyle = '#ff6600';
+        this.ctx.lineWidth   = 1.5;
+        this.ctx.setLineDash([5, 3]);
+        this.ctx.strokeRect(x, y, w, h);
+        this.ctx.restore();
+        const hs = HANDLE_SIZE / 2;
+        for (const [cx, cy] of [[x, y], [x + w, y], [x, y + h], [x + w, y + h]] as [number, number][]) {
+            this.ctx.save();
+            this.ctx.setLineDash([]);
+            this.ctx.fillStyle   = '#ffffff';
+            this.ctx.strokeStyle = '#ff6600';
+            this.ctx.lineWidth   = 1.5;
+            this.ctx.fillRect(cx - hs, cy - hs, HANDLE_SIZE, HANDLE_SIZE);
+            this.ctx.strokeRect(cx - hs, cy - hs, HANDLE_SIZE, HANDLE_SIZE);
+            this.ctx.restore();
+        }
     }
 
     private updateCursor(mx: number, my: number): void {
@@ -859,6 +1078,10 @@ class EasyNoteView extends ItemView {
         this.textLayers      = [];
         this.selectedIdx     = -1;
         this.selectedTextIdx = -1;
+        this.paintFragment   = null;
+        this.paintFragDrag   = null;
+        this.selStart        = null;
+        this.selCurrent      = null;
         this.render();
     }
 
@@ -971,8 +1194,13 @@ class EasyNoteView extends ItemView {
 
     // ── 工具切換 ──────────────────────────────────────────────────────────────
 
-    private setTool(t: 'draw' | 'select' | 'text'): void {
+    private setTool(t: 'draw' | 'select' | 'text' | 'paintselect'): void {
+        // 離開 paintselect 時先 commit fragment
+        if (this.tool === 'paintselect' && t !== 'paintselect') {
+            this.commitFragment();
+        }
         this.tool = t;
+        this.paintSelectBtn.toggleClass('active', t === 'paintselect');
         if (t === 'draw') {
             this.canvas.style.cursor = 'crosshair';
             this.selectBtn.removeClass('active');
@@ -983,10 +1211,15 @@ class EasyNoteView extends ItemView {
             this.selectBtn.addClass('active');
             this.textBtn.removeClass('active');
             this.eraserBtn.removeClass('active');
-        } else { // text
+        } else if (t === 'text') {
             this.canvas.style.cursor = 'text';
             this.textBtn.addClass('active');
             this.selectBtn.removeClass('active');
+            this.eraserBtn.removeClass('active');
+        } else { // paintselect
+            this.canvas.style.cursor = 'crosshair';
+            this.selectBtn.removeClass('active');
+            this.textBtn.removeClass('active');
             this.eraserBtn.removeClass('active');
         }
         this.refreshStatus();
@@ -1024,6 +1257,9 @@ class EasyNoteView extends ItemView {
             this.statusLabel.textContent = `選取模式 | 圖片: ${ni} 張 | 文字: ${nt} 個 | ${zoomStr}`;
         } else if (this.tool === 'text') {
             this.statusLabel.textContent = `工具: 文字 | 字體: ${this.textFontSize}px | ${zoomStr}`;
+        } else if (this.tool === 'paintselect') {
+            const fragStr = this.paintFragment ? ' | 已選取區塊' : '';
+            this.statusLabel.textContent = `工具: 繪畫選取${fragStr} | Enter 確認　Esc 取消　Del 棄用 | ${zoomStr}`;
         } else {
             const toolName = this.eraser ? '橡皮擦' : `${this.colorNames[this.colorIdx]} 鉛筆`;
             const opPct    = Math.round(this.brushOpacity * 100);
@@ -1044,6 +1280,21 @@ class EasyNoteView extends ItemView {
             case 't': case 'T':
                 this.setTool(this.tool === 'text' ? 'draw' : 'text');
                 break;
+            case 'm': case 'M':
+                this.setTool(this.tool === 'paintselect' ? 'draw' : 'paintselect');
+                break;
+            case 'Enter':
+                if (this.tool === 'paintselect') { this.commitFragment(); this.refreshStatus(); }
+                break;
+            case 'Escape':
+                if (this.tool === 'paintselect') {
+                    if (this.selStart) {
+                        this.selStart = null; this.selCurrent = null; this.render();
+                    } else {
+                        this.cancelFragment(); this.refreshStatus();
+                    }
+                }
+                break;
             case 'c': case 'C':
                 if (this.tool !== 'select') this.clearCanvas();
                 break;
@@ -1063,6 +1314,12 @@ class EasyNoteView extends ItemView {
                         this.render();
                         this.refreshStatus();
                     }
+                } else if (this.tool === 'paintselect' && this.paintFragment) {
+                    // 棄用 fragment（不還原到畫布）
+                    this.paintFragment = null;
+                    this.paintFragDrag = null;
+                    this.render();
+                    this.refreshStatus();
                 }
                 break;
             case '1': this.setColor(0); break;
@@ -1140,6 +1397,11 @@ class EasyNoteView extends ItemView {
             }
             // 繪畫層（上方）
             tc.drawImage(this.paintCanvas, 0, 0);
+            // 若有浮動 fragment，也合入存圖
+            if (this.paintFragment) {
+                const f = this.paintFragment;
+                tc.drawImage(f.offscreen, 0, 0, f.offscreen.width, f.offscreen.height, f.x, f.y, f.w, f.h);
+            }
 
             const dataUrl = tmp.toDataURL('image/png');
             const base64  = dataUrl.split(',')[1];
