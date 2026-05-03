@@ -1549,7 +1549,6 @@ class EasyNoteView extends ItemView {
         ta.style.left        = `${screenX}px`;
         ta.style.top         = `${screenY}px`;
         ta.style.fontSize    = `${fontSize * this.zoom}px`;
-        ta.style.color       = color;
         ta.rows              = 3;
         if (layerIdx >= 0) ta.value = this.textLayers[layerIdx].text;
 
