@@ -42,6 +42,18 @@ const DEFAULT_SETTINGS: EasyNoteSettings = {
     defaultColors:    [...COLORS],
 };
 
+// ─── .enote 專案格式 ──────────────────────────────────────────────────────────
+interface ENoteImageLayer { src: string; x: number; y: number; w: number; h: number; }
+interface ENoteTextLayer  { text: string; x: number; y: number; fontSize: number; color: string; }
+interface ENote {
+    version:      number;
+    canvasWidth:  number;
+    canvasHeight: number;
+    paintLayer:   string;            // data:image/png;base64,...
+    imageLayers:  ENoteImageLayer[];
+    textLayers:   ENoteTextLayer[];
+}
+
 interface ImageLayer {
     img: HTMLImageElement;
     x: number;
@@ -410,6 +422,28 @@ class EasyNoteView extends ItemView {
         canvasSizeBtn.addEventListener('click', () => {
             new CanvasSizeModal(this.app, this.canvas.width, this.canvas.height,
                 (w, h) => this.setCanvasSize(w, h)).open();
+        });
+        row2.createEl('div', { cls: 'easynote-sep' });
+
+        // 儲存專案 (.enote)
+        const saveProjectBtn = row2.createEl('button', {
+            cls:   'easynote-btn',
+            text:  '儲存專案',
+            title: '儲存可繼續編輯的 .enote 專案檔',
+        });
+        saveProjectBtn.addEventListener('click', () => {
+            const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+            new ProjectNameModal(this.app, `EasyNote-${ts}`, (name) => this.saveProject(name)).open();
+        });
+
+        // 載入專案 (.enote)
+        const loadProjectBtn = row2.createEl('button', {
+            cls:   'easynote-btn',
+            text:  '載入專案',
+            title: '從 Vault 載入 .enote 專案檔',
+        });
+        loadProjectBtn.addEventListener('click', () => {
+            new VaultProjectPickerModal(this.app, (file) => this.loadProject(file)).open();
         });
         row2.createEl('div', { cls: 'easynote-sep' });
 
@@ -1454,6 +1488,107 @@ class EasyNoteView extends ItemView {
         }
     }
 
+    // ── 專案儲存 / 載入 (.enote) ──────────────────────────────────────────────
+    async saveProject(baseName: string): Promise<void> {
+        try {
+            const folder = normalizePath(this.settings.saveFolder);
+            if (!(await this.app.vault.adapter.exists(folder))) {
+                await this.app.vault.createFolder(folder);
+            }
+            const filename = normalizePath(`${folder}/${baseName}.enote`);
+
+            // 繪畫層 → base64 PNG
+            const paintLayer = this.paintCanvas.toDataURL('image/png');
+
+            // 圖片層 → 每張先畫到暫存 canvas 取得 data URL
+            const imageLayers: ENoteImageLayer[] = this.imageLayers.map((lay) => {
+                const tmp   = document.createElement('canvas');
+                tmp.width   = lay.img.naturalWidth  || lay.w;
+                tmp.height  = lay.img.naturalHeight || lay.h;
+                tmp.getContext('2d')!.drawImage(lay.img, 0, 0);
+                return { src: tmp.toDataURL('image/png'), x: lay.x, y: lay.y, w: lay.w, h: lay.h };
+            });
+
+            const project: ENote = {
+                version:      1,
+                canvasWidth:  this.canvas.width,
+                canvasHeight: this.canvas.height,
+                paintLayer,
+                imageLayers,
+                textLayers: this.textLayers.map(tl => ({ ...tl })),
+            };
+
+            const bytes = new TextEncoder().encode(JSON.stringify(project, null, 2));
+            if (await this.app.vault.adapter.exists(filename)) {
+                const existing = this.app.vault.getAbstractFileByPath(filename);
+                if (existing instanceof TFile) {
+                    await this.app.vault.modifyBinary(existing, bytes.buffer as ArrayBuffer);
+                }
+            } else {
+                await this.app.vault.createBinary(filename, bytes.buffer as ArrayBuffer);
+            }
+            new Notice(`✓ 專案已儲存: ${filename}`);
+        } catch (err) {
+            new Notice(`✗ 儲存專案失敗: ${err}`);
+            console.error('[EasyNote] saveProject error:', err);
+        }
+    }
+
+    async loadProject(file: TFile): Promise<void> {
+        try {
+            const raw     = await this.app.vault.readBinary(file);
+            const json    = new TextDecoder().decode(raw);
+            const project = JSON.parse(json) as ENote;
+
+            // 重置狀態
+            this.imageLayers     = [];
+            this.textLayers      = [];
+            this.selectedIdx     = -1;
+            this.selectedTextIdx = -1;
+            this.paintFragment   = null;
+
+            // 設定畫布尺寸（直接寫，不復原舊內容）
+            this.manualWidth  = project.canvasWidth;
+            this.manualHeight = project.canvasHeight;
+            this.canvas.width      = project.canvasWidth;
+            this.canvas.height     = project.canvasHeight;
+            this.paintCanvas.width  = project.canvasWidth;
+            this.paintCanvas.height = project.canvasHeight;
+
+            // 載入繪畫層
+            await new Promise<void>((resolve) => {
+                const img = new Image();
+                img.onload = () => { this.paintCtx.drawImage(img, 0, 0); resolve(); };
+                img.onerror = () => resolve();
+                img.src = project.paintLayer;
+            });
+
+            // 載入圖片層
+            for (const lay of project.imageLayers) {
+                await new Promise<void>((resolve) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        this.imageLayers.push({ img, x: lay.x, y: lay.y, w: lay.w, h: lay.h });
+                        resolve();
+                    };
+                    img.onerror = () => resolve();
+                    img.src = lay.src;
+                });
+            }
+
+            // 還原文字層
+            this.textLayers = project.textLayers.map(tl => ({ ...tl }));
+
+            this.setTool('draw');
+            this.applyZoom();
+            this.render();
+            new Notice('EasyNote：專案已載入');
+        } catch (err) {
+            new Notice(`✗ 載入專案失敗: ${err}`);
+            console.error('[EasyNote] loadProject error:', err);
+        }
+    }
+
     // ── 儲存至 Vault ──────────────────────────────────────────────────────────
     async saveDrawing(baseName: string, fmt: 'png' | 'jpeg' | 'webp'): Promise<void> {
         try {
@@ -1646,6 +1781,101 @@ class CanvasSizeModal extends Modal {
         });
         const cancelBtn = btnRow.createEl('button', { cls: 'easynote-btn', text: '取消' });
         cancelBtn.addEventListener('click', () => this.close());
+    }
+
+    onClose(): void { this.contentEl.empty(); }
+}
+
+// ─── 專案名稱 Modal ───────────────────────────────────────────────────────────
+class ProjectNameModal extends Modal {
+    private name: string;
+    private onConfirm: (name: string) => void;
+
+    constructor(app: App, defaultName: string, onConfirm: (name: string) => void) {
+        super(app);
+        this.name      = defaultName;
+        this.onConfirm = onConfirm;
+    }
+
+    onOpen(): void {
+        const { contentEl } = this;
+        contentEl.empty();
+        contentEl.createEl('h3', { text: '儲存專案' });
+
+        new Setting(contentEl)
+            .setName('專案名稱')
+            .setDesc('儲存為 .enote 格式，可下次繼續編輯')
+            .addText((t) => {
+                t.setValue(this.name);
+                t.inputEl.style.width = '100%';
+                t.onChange((v) => { this.name = v.trim() || this.name; });
+                setTimeout(() => { t.inputEl.select(); t.inputEl.focus(); }, 30);
+            });
+
+        const btnRow   = contentEl.createEl('div', { cls: 'easynote-size-btnrow' });
+        const saveBtn  = btnRow.createEl('button', { cls: 'easynote-btn easynote-btn-save', text: '儲存' });
+        saveBtn.addEventListener('click', () => { if (this.name) { this.onConfirm(this.name); this.close(); } });
+        const cancelBtn = btnRow.createEl('button', { cls: 'easynote-btn', text: '取消' });
+        cancelBtn.addEventListener('click', () => this.close());
+
+        contentEl.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter')  { saveBtn.click();  e.preventDefault(); }
+            if (e.key === 'Escape') { this.close();     e.preventDefault(); }
+        });
+    }
+
+    onClose(): void { this.contentEl.empty(); }
+}
+
+// ─── Vault 專案選擇 Modal (.enote) ────────────────────────────────────────────
+class VaultProjectPickerModal extends Modal {
+    private onChoose:     (file: TFile) => void;
+    private searchInput!: HTMLInputElement;
+    private listEl!:      HTMLElement;
+
+    constructor(app: App, onChoose: (file: TFile) => void) {
+        super(app);
+        this.onChoose = onChoose;
+    }
+
+    onOpen(): void {
+        const { contentEl } = this;
+        contentEl.empty();
+        this.modalEl.addClass('easynote-project-picker-modal');
+        contentEl.createEl('h3', { text: '載入 .enote 專案' });
+
+        this.searchInput             = contentEl.createEl('input');
+        this.searchInput.type        = 'text';
+        this.searchInput.placeholder = '搜尋專案名稱…';
+        this.searchInput.className   = 'easynote-picker-search';
+        this.searchInput.addEventListener('input', () => this.renderList());
+
+        this.listEl = contentEl.createEl('div', { cls: 'easynote-project-list' });
+        this.renderList();
+        setTimeout(() => this.searchInput.focus(), 50);
+    }
+
+    private getFiles(): TFile[] {
+        const query = this.searchInput?.value.toLowerCase() ?? '';
+        return this.app.vault.getFiles()
+            .filter(f => f.extension.toLowerCase() === 'enote')
+            .filter(f => !query || f.name.toLowerCase().includes(query) || f.path.toLowerCase().includes(query))
+            .sort((a, b) => b.stat.mtime - a.stat.mtime);  // 最近修改優先
+    }
+
+    private renderList(): void {
+        this.listEl.empty();
+        const files = this.getFiles();
+        if (files.length === 0) {
+            this.listEl.createEl('div', { cls: 'easynote-picker-empty', text: '找不到 .enote 檔案' });
+            return;
+        }
+        for (const file of files) {
+            const item = this.listEl.createEl('div', { cls: 'easynote-project-item' });
+            item.createEl('span', { cls: 'easynote-project-name', text: file.basename });
+            item.createEl('span', { cls: 'easynote-project-path', text: file.parent?.path ?? '/' });
+            item.addEventListener('click', () => { this.onChoose(file); this.close(); });
+        }
     }
 
     onClose(): void { this.contentEl.empty(); }

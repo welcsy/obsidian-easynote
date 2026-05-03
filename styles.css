@@ -257,6 +257,42 @@
     max-width: 92vw;
 }
 
+/* 專案選擇 Modal */
+.easynote-project-picker-modal {
+    width:     480px;
+    max-width: 92vw;
+}
+.easynote-project-list {
+    max-height: 340px;
+    overflow-y: auto;
+    display:    flex;
+    flex-direction: column;
+    gap:        4px;
+    margin-top: 4px;
+}
+.easynote-project-item {
+    display:        flex;
+    justify-content: space-between;
+    align-items:    center;
+    padding:        8px 10px;
+    border-radius:  6px;
+    border:         1px solid var(--background-modifier-border);
+    cursor:         pointer;
+    transition:     background 0.1s;
+}
+.easynote-project-item:hover {
+    background: var(--background-modifier-hover);
+}
+.easynote-project-name {
+    font-size:   14px;
+    font-weight: 500;
+    color:       var(--text-normal);
+}
+.easynote-project-path {
+    font-size: 11px;
+    color:     var(--text-muted);
+}
+
 .easynote-picker-search {
     width:         100%;
     padding:       6px 10px;
