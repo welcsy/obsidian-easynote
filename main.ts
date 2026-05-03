@@ -170,6 +170,12 @@ class EasyNoteView extends ItemView {
     private panScrollLeft = 0;
     private panScrollTop  = 0;
 
+    // 自動儲存
+    private autoSaveTimer:   ReturnType<typeof setTimeout> | null = null;
+    private lastAutoSaveTime: Date | null = null;
+    private static readonly AUTOSAVE_DEBOUNCE_MS = 3000;   // 最後一次變更後 3 秒觸發
+    private static readonly AUTOSAVE_FILENAME    = 'EasyNote-autosave.enote';
+
     // 事件繫結
     private _onKeyDown!: (e: KeyboardEvent)  => void;
     private _onPaste!:   (e: ClipboardEvent) => void;
@@ -216,11 +222,31 @@ class EasyNoteView extends ItemView {
 
         this.refreshColorBtns();
         this.refreshStatus();
+
+        // 嘗試載入自動儲存的暫存檔
+        const autosavePath = normalizePath(
+            `${this.settings.saveFolder}/${EasyNoteView.AUTOSAVE_FILENAME}`
+        );
+        const autosaveFile = this.app.vault.getAbstractFileByPath(autosavePath);
+        if (autosaveFile instanceof TFile) {
+            await this.loadProject(autosaveFile);
+            // loadProject 裡的 render() 會排程 autosave，取消避免立即覆寫
+            if (this.autoSaveTimer !== null) {
+                clearTimeout(this.autoSaveTimer);
+                this.autoSaveTimer = null;
+            }
+        }
     }
 
     async onClose(): Promise<void> {
         if (this._textEditing) { this._textEditing.el.remove(); this._textEditing = null; }
         if (this.paintFragment) this.commitFragment();
+        // 取消 debounce，立即寫出最新狀態
+        if (this.autoSaveTimer !== null) {
+            clearTimeout(this.autoSaveTimer);
+            this.autoSaveTimer = null;
+        }
+        this.autoSaveDirect();
         document.removeEventListener('keydown', this._onKeyDown);
         document.removeEventListener('paste',   this._onPaste);
         window.removeEventListener('resize',    this._onResize);
@@ -942,6 +968,8 @@ class EasyNoteView extends ItemView {
                 this.drawFragmentHandles(this.paintFragment);
             }
         }
+        // 每次畫面更新後排程自動儲存（debounce）
+        this.scheduleAutosave();
     }
 
     private drawSelectionHandles(lay: ImageLayer): void {
@@ -1378,19 +1406,22 @@ class EasyNoteView extends ItemView {
 
     private refreshStatus(): void {
         const zoomStr = `縮放: ${Math.round(this.zoom * 100)}%`;
+        const saveStr = this.lastAutoSaveTime
+            ? `暫存: ${this.lastAutoSaveTime.toLocaleTimeString()}`
+            : '暫存: 等待中';
         if (this.tool === 'select') {
             const ni = this.imageLayers.length;
             const nt = this.textLayers.length;
-            this.statusLabel.textContent = `選取模式 | 圖片: ${ni} 張 | 文字: ${nt} 個 | ${zoomStr}`;
+            this.statusLabel.textContent = `選取模式 | 圖片: ${ni} 張 | 文字: ${nt} 個 | ${zoomStr} | ${saveStr}`;
         } else if (this.tool === 'text') {
-            this.statusLabel.textContent = `工具: 文字 | 字體: ${this.textFontSize}px | ${zoomStr}`;
+            this.statusLabel.textContent = `工具: 文字 | 字體: ${this.textFontSize}px | ${zoomStr} | ${saveStr}`;
         } else if (this.tool === 'paintselect') {
             const fragStr = this.paintFragment ? ' | 已選取區塊' : '';
-            this.statusLabel.textContent = `工具: 繪畫選取${fragStr} | Enter 確認　Esc 取消　Del 棄用 | ${zoomStr}`;
+            this.statusLabel.textContent = `工具: 繪畫選取${fragStr} | Enter 確認　Esc 取消　Del 棄用 | ${zoomStr} | ${saveStr}`;
         } else {
             const toolName = this.eraser ? '橡皮擦' : `${this.colorNames[this.colorIdx]} 鉛筆`;
             const opPct    = Math.round(this.brushOpacity * 100);
-            this.statusLabel.textContent = `工具: ${toolName} | 大小: ${this.brushSize} | 透明度: ${opPct}% | ${zoomStr}`;
+            this.statusLabel.textContent = `工具: ${toolName} | 大小: ${this.brushSize} | 透明度: ${opPct}% | ${zoomStr} | ${saveStr}`;
         }
     }
 
@@ -1485,6 +1516,57 @@ class EasyNoteView extends ItemView {
                 if (blob) { e.preventDefault(); this.loadImageFromBlob(blob); }
                 return;
             }
+        }
+    }
+
+    // ── 自動儲存 ──────────────────────────────────────────────────────────────
+    /** 每次 render() 後呼叫；debounce 3 秒後寫出暫存檔 */
+    private scheduleAutosave(): void {
+        if (this.autoSaveTimer !== null) clearTimeout(this.autoSaveTimer);
+        this.autoSaveTimer = setTimeout(() => {
+            this.autoSaveTimer = null;
+            this.autoSaveDirect();
+        }, EasyNoteView.AUTOSAVE_DEBOUNCE_MS);
+    }
+
+    private async autoSaveDirect(): Promise<void> {
+        try {
+            const folder = normalizePath(this.settings.saveFolder);
+            if (!(await this.app.vault.adapter.exists(folder))) {
+                await this.app.vault.createFolder(folder);
+            }
+            const filepath = normalizePath(`${folder}/${EasyNoteView.AUTOSAVE_FILENAME}`);
+
+            const paintLayer  = this.paintCanvas.toDataURL('image/png');
+            const imageLayers: ENoteImageLayer[] = this.imageLayers.map((lay) => {
+                const tmp  = document.createElement('canvas');
+                tmp.width  = lay.img.naturalWidth  || lay.w;
+                tmp.height = lay.img.naturalHeight || lay.h;
+                tmp.getContext('2d')!.drawImage(lay.img, 0, 0);
+                return { src: tmp.toDataURL('image/png'), x: lay.x, y: lay.y, w: lay.w, h: lay.h };
+            });
+            const project: ENote = {
+                version:      1,
+                canvasWidth:  this.canvas.width,
+                canvasHeight: this.canvas.height,
+                paintLayer,
+                imageLayers,
+                textLayers: this.textLayers.map(tl => ({ ...tl })),
+            };
+
+            const bytes = new TextEncoder().encode(JSON.stringify(project));
+            if (await this.app.vault.adapter.exists(filepath)) {
+                const existing = this.app.vault.getAbstractFileByPath(filepath);
+                if (existing instanceof TFile) {
+                    await this.app.vault.modifyBinary(existing, bytes.buffer as ArrayBuffer);
+                }
+            } else {
+                await this.app.vault.createBinary(filepath, bytes.buffer as ArrayBuffer);
+            }
+            this.lastAutoSaveTime = new Date();
+            this.refreshStatus();
+        } catch (err) {
+            console.error('[EasyNote] autosave error:', err);
         }
     }
 
