@@ -230,6 +230,7 @@ class EasyNoteView extends ItemView {
     private opacityValueLabel!: HTMLSpanElement;
     private colorBtns:    HTMLElement[] = [];
     private fileInput!:   HTMLInputElement;
+    private activeLayerLabel!: HTMLSpanElement;
 
     // 縮放 & 平移（滾輪縮放，中鍵拖曳平移）
     private zoom          = 1.0;
@@ -532,6 +533,10 @@ class EasyNoteView extends ItemView {
         loadNoteBtn.addEventListener('click', () => {
             new VaultNotePickerModal(this.app, (file) => this.addLinkedMarkdownLayer(file)).open();
         });
+
+        // 目前圕層類型標示（右側）
+        row1.createEl('div', { cls: 'easynote-spacer' });
+        this.activeLayerLabel = row1.createEl('span', { cls: 'easynote-active-layer' });
 
         // ── 第二行 ──────────────────────────────────────────────────────────
         // 筆刷滑桿
@@ -1748,6 +1753,20 @@ class EasyNoteView extends ItemView {
         }
         if (this.opacityValueLabel) {
             this.opacityValueLabel.textContent = `${Math.round(this.brushOpacity * 100)}%`;
+        }
+
+        // 目前圕層類型
+        if (this.activeLayerLabel) {
+            let layerName: string;
+            if (this.tool === 'text') {
+                layerName = '文字層';
+            } else if (this.tool === 'select') {
+                layerName = '圖片層';
+            } else {
+                layerName = '插畫層';
+            }
+            this.activeLayerLabel.textContent = layerName;
+            this.activeLayerLabel.setAttribute('data-layer', this.tool === 'text' ? 'text' : this.tool === 'select' ? 'image' : 'paint');
         }
 
         const zoomStr = `縮放: ${Math.round(this.zoom * 100)}%`;
