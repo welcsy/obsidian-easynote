@@ -224,8 +224,10 @@ class EasyNoteView extends ItemView {
     private selectBtn!:       HTMLButtonElement;
     private textBtn!:         HTMLButtonElement;
     private fontSizeInput!:   HTMLInputElement;
-    private sizeSlider!:    HTMLInputElement;
-    private opacitySlider!: HTMLInputElement;
+    private sizeSlider!:       HTMLInputElement;
+    private sizeValueLabel!:   HTMLSpanElement;
+    private opacitySlider!:    HTMLInputElement;
+    private opacityValueLabel!: HTMLSpanElement;
     private colorBtns:    HTMLElement[] = [];
     private fileInput!:   HTMLInputElement;
 
@@ -369,6 +371,27 @@ class EasyNoteView extends ItemView {
         row1.createEl('span', { cls: 'easynote-title', text: '✏ EasyNote' });
         row1.createEl('div',  { cls: 'easynote-sep'  });
 
+        // ── 插畫 群組 ────────────────────────────────────────────────────────
+        row1.createEl('span', { cls: 'easynote-group-label', text: '插畫' });
+
+        // 橡皮擦（快捷 E）
+        this.eraserBtn = row1.createEl('button', {
+            cls:   'easynote-btn easynote-btn-icon',
+            title: '橡皮擦（快捷：E）',
+        });
+        setIcon(this.eraserBtn, 'eraser');
+        this.eraserBtn.addEventListener('click', () => this.toggleEraser());
+
+        // 繪畫選取工具（快捷 M）
+        this.paintSelectBtn = row1.createEl('button', {
+            cls:   'easynote-btn easynote-btn-icon',
+            title: '框選繪畫層區塊，可移動/縮放後再合併（快捷：M）\nEnter 確認　Esc 取消　Del 刪除選取區塊',
+        });
+        setIcon(this.paintSelectBtn, 'lasso');
+        this.paintSelectBtn.addEventListener('click', () => this.setTool('paintselect'));
+
+        row1.createEl('div', { cls: 'easynote-sep' });
+
         // 色彩按鈕（單擊選色 / 雙擊開啟顏色選擇器 快捷 1~5）
         row1.createEl('span', { cls: 'easynote-label', text: '顏色:' });
         this.colorBtns = [];
@@ -427,21 +450,8 @@ class EasyNoteView extends ItemView {
         }
         row1.createEl('div', { cls: 'easynote-sep' });
 
-        // 橡皮擦（快捷 E）
-        this.eraserBtn = row1.createEl('button', {
-            cls:   'easynote-btn easynote-btn-icon',
-            title: '橡皮擦（快捷：E）',
-        });
-        setIcon(this.eraserBtn, 'eraser');
-        this.eraserBtn.addEventListener('click', () => this.toggleEraser());
-
-        // 選取工具（快捷 S）
-        this.selectBtn = row1.createEl('button', {
-            cls:   'easynote-btn easynote-btn-icon',
-            title: '選取並移動/縮放圖片（快捷：S）\nDel 刪除選取圖片',
-        });
-        setIcon(this.selectBtn, 'mouse-pointer-2');
-        this.selectBtn.addEventListener('click', () => this.setTool('select'));
+        // ── 文字 群組 ────────────────────────────────────────────────────────
+        row1.createEl('span', { cls: 'easynote-group-label', text: '文字' });
 
         // 文字工具（快捷 T）
         this.textBtn = row1.createEl('button', {
@@ -472,21 +482,56 @@ class EasyNoteView extends ItemView {
             }
         });
 
-        // 繪畫選取工具（快捷 M）
-        this.paintSelectBtn = row1.createEl('button', {
-            cls:   'easynote-btn easynote-btn-icon',
-            title: '框選繪畫層區塊，可移動/縮放後再合併（快捷：M）\nEnter 確認　Esc 取消　Del 刪除選取區塊',
-        });
-        setIcon(this.paintSelectBtn, 'lasso');
-        this.paintSelectBtn.addEventListener('click', () => this.setTool('paintselect'));
+        row1.createEl('div', { cls: 'easynote-sep' });
 
-        // 清除畫布（快捷 C）
-        const clearBtn = row1.createEl('button', {
-            cls:   'easynote-btn',
-            text:  '清除 (C)',
-            title: '清除整個畫布（快捷：C）',
+        // ── 圖片 群組 ────────────────────────────────────────────────────────
+        row1.createEl('span', { cls: 'easynote-group-label', text: '圖片' });
+
+        // 選取工具（快捷 S）
+        this.selectBtn = row1.createEl('button', {
+            cls:   'easynote-btn easynote-btn-icon',
+            title: '選取並移動/縮放圖片（快捷：S）\nDel 刪除選取圖片',
         });
-        clearBtn.addEventListener('click', () => this.clearCanvas());
+        setIcon(this.selectBtn, 'mouse-pointer-2');
+        this.selectBtn.addEventListener('click', () => this.setTool('select'));
+
+        // 載入本機圖片
+        const loadBtn = row1.createEl('button', {
+            cls:   'easynote-btn',
+            text:  '載入本機圖片',
+            title: '從本機載入圖片（也可拖曳或 Ctrl+V）',
+        });
+        loadBtn.addEventListener('click', () => this.fileInput.click());
+
+        this.fileInput        = row1.createEl('input');
+        this.fileInput.type   = 'file';
+        this.fileInput.accept = 'image/*';
+        this.fileInput.style.display = 'none';
+        this.fileInput.addEventListener('change', () => {
+            const file = this.fileInput.files?.[0];
+            if (file) this.loadImageFromBlob(file);
+            this.fileInput.value = '';
+        });
+
+        // 載入Obsidian圖片
+        const vaultBtn = row1.createEl('button', {
+            cls:   'easynote-btn',
+            text:  '載入Obsidian圖片',
+            title: '從 Vault 中選取圖片',
+        });
+        vaultBtn.addEventListener('click', () => {
+            new VaultImagePickerModal(this.app, (file) => this.loadImageFromVault(file)).open();
+        });
+
+        // 載入筆記
+        const loadNoteBtn = row1.createEl('button', {
+            cls:   'easynote-btn',
+            text:  '載入筆記',
+            title: '將 Vault .md 筆記以 Markdown 圖層載入（每次開啟自動更新）',
+        });
+        loadNoteBtn.addEventListener('click', () => {
+            new VaultNotePickerModal(this.app, (file) => this.addLinkedMarkdownLayer(file)).open();
+        });
 
         // ── 第二行 ──────────────────────────────────────────────────────────
         // 筆刷滑桿
@@ -506,6 +551,7 @@ class EasyNoteView extends ItemView {
             this.sizeSlider.title = '筆刷大小';
         }
         this.sizeSlider.className = 'easynote-slider';
+        this.sizeValueLabel = row2.createEl('span', { cls: 'easynote-slider-value' });
         this.sizeSlider.addEventListener('input', () => {
             if ((this.settings.brushMode ?? 'steps') === 'steps') {
                 this.brushSize = BRUSH_STEPS[parseInt(this.sizeSlider.value) - 1];
@@ -524,38 +570,10 @@ class EasyNoteView extends ItemView {
         this.opacitySlider.value     = '100';
         this.opacitySlider.title     = '筆刷透明度（1% 最透明，100% 不透明）';
         this.opacitySlider.className = 'easynote-slider';
+        this.opacityValueLabel = row2.createEl('span', { cls: 'easynote-slider-value' });
         this.opacitySlider.addEventListener('input', () => {
             this.brushOpacity = parseInt(this.opacitySlider.value) / 100;
             this.refreshStatus();
-        });
-        row2.createEl('div', { cls: 'easynote-sep' });
-
-        // 載入圖片 — 本機檔案
-        const loadBtn = row2.createEl('button', {
-            cls:   'easynote-btn',
-            text:  '載入圖片',
-            title: '從本機載入圖片（也可拖曳或 Ctrl+V）',
-        });
-        loadBtn.addEventListener('click', () => this.fileInput.click());
-
-        this.fileInput        = row2.createEl('input');
-        this.fileInput.type   = 'file';
-        this.fileInput.accept = 'image/*';
-        this.fileInput.style.display = 'none';
-        this.fileInput.addEventListener('change', () => {
-            const file = this.fileInput.files?.[0];
-            if (file) this.loadImageFromBlob(file);
-            this.fileInput.value = '';
-        });
-
-        // 從 Vault 選取圖片
-        const vaultBtn = row2.createEl('button', {
-            cls:   'easynote-btn',
-            text:  'Vault 圖片',
-            title: '從 Vault 中選取圖片',
-        });
-        vaultBtn.addEventListener('click', () => {
-            new VaultImagePickerModal(this.app, (file) => this.loadImageFromVault(file)).open();
         });
         row2.createEl('div', { cls: 'easynote-sep' });
 
@@ -574,7 +592,7 @@ class EasyNoteView extends ItemView {
         // 儲存專案 (.enote)
         const saveProjectBtn = row2.createEl('button', {
             cls:   'easynote-btn',
-            text:  '儲存專案',
+            text:  '儲存畫布',
             title: '儲存可繼續編輯的 .enote 專案檔',
         });
         saveProjectBtn.addEventListener('click', () => {
@@ -585,28 +603,17 @@ class EasyNoteView extends ItemView {
         // 載入專案 (.enote)
         const loadProjectBtn = row2.createEl('button', {
             cls:   'easynote-btn',
-            text:  '載入專案',
+            text:  '載入畫布',
             title: '從 Vault 載入 .enote 專案檔',
         });
         loadProjectBtn.addEventListener('click', () => {
             new VaultProjectPickerModal(this.app, (file) => this.loadProject(file)).open();
         });
 
-        // 載入筆記 — 將 Vault .md 對映為連結 Markdown 圖層
-        const loadNoteBtn = row2.createEl('button', {
-            cls:   'easynote-btn',
-            text:  '載入筆記',
-            title: '將 Vault .md 筆記以 Markdown 圖層載入（每次開啟自動更新）',
-        });
-        loadNoteBtn.addEventListener('click', () => {
-            new VaultNotePickerModal(this.app, (file) => this.addLinkedMarkdownLayer(file)).open();
-        });
-        row2.createEl('div', { cls: 'easynote-sep' });
-
         // 儲存檔案
         const saveBtn = row2.createEl('button', {
             cls:   'easynote-btn easynote-btn-save',
-            text:  '儲存檔案',
+            text:  '匯出',
             title: '將手繪圖儲存到 Vault',
         });
         saveBtn.addEventListener('click', () => {
@@ -1730,6 +1737,19 @@ class EasyNoteView extends ItemView {
     }
 
     private refreshStatus(): void {
+        // 筆刷 & 透明度 toolbar 數值標籤
+        if (this.sizeValueLabel) {
+            if ((this.settings.brushMode ?? 'steps') === 'steps') {
+                const step = brushSizeToStep(this.brushSize);
+                this.sizeValueLabel.textContent = `第${step}階(${this.brushSize}px)`;
+            } else {
+                this.sizeValueLabel.textContent = `${this.brushSize}px`;
+            }
+        }
+        if (this.opacityValueLabel) {
+            this.opacityValueLabel.textContent = `${Math.round(this.brushOpacity * 100)}%`;
+        }
+
         const zoomStr = `縮放: ${Math.round(this.zoom * 100)}%`;
         const saveStr = this.lastAutoSaveTime
             ? `暫存: ${this.lastAutoSaveTime.toLocaleTimeString()}`
