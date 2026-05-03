@@ -18,6 +18,18 @@ const TOOLBAR_HEIGHT   = 52;
 const MIN_BRUSH_SIZE   = 1;
 const MAX_BRUSH_SIZE   = 60;
 const HANDLE_SIZE      = 8;   // 選取控點大小（px）
+// 7 階筆刷大小（第 2 階 = 6px 為預設）
+const BRUSH_STEPS: number[] = [2, 6, 12, 20, 30, 44, 60];
+
+/** 將筆刷 px 轉成最近的 1–7 階 */
+function brushSizeToStep(size: number): number {
+    let best = 0, bestDiff = Infinity;
+    for (let i = 0; i < BRUSH_STEPS.length; i++) {
+        const d = Math.abs(BRUSH_STEPS[i] - size);
+        if (d < bestDiff) { bestDiff = d; best = i; }
+    }
+    return best + 1;  // 1-based
+}
 
 const COLORS: string[] = [
     '#0d0d0d',
@@ -34,12 +46,14 @@ interface EasyNoteSettings {
     defaultBrushSize: number;
     saveFolder:       string;
     defaultColors:    string[];
+    brushMode:        'steps' | 'continuous';
 }
 const DEFAULT_SETTINGS: EasyNoteSettings = {
     defaultColorIdx:  0,
     defaultBrushSize: 6,
     saveFolder:       'EasyNote',
     defaultColors:    [...COLORS],
+    brushMode:        'steps',
 };
 
 // ─── .enote 專案格式 ──────────────────────────────────────────────────────────
@@ -479,13 +493,25 @@ class EasyNoteView extends ItemView {
         row2.createEl('span', { cls: 'easynote-label', text: '筆刷:' });
         this.sizeSlider           = row2.createEl('input');
         this.sizeSlider.type      = 'range';
-        this.sizeSlider.min       = String(MIN_BRUSH_SIZE);
-        this.sizeSlider.max       = String(MAX_BRUSH_SIZE);
-        this.sizeSlider.value     = String(this.brushSize);
-        this.sizeSlider.title     = '筆刷大小';
+        this.sizeSlider.step      = '1';
+        if ((this.settings.brushMode ?? 'steps') === 'steps') {
+            this.sizeSlider.min   = '1';
+            this.sizeSlider.max   = '7';
+            this.sizeSlider.value = String(brushSizeToStep(this.brushSize));
+            this.sizeSlider.title = '筆刷大小（7 階）';
+        } else {
+            this.sizeSlider.min   = String(MIN_BRUSH_SIZE);
+            this.sizeSlider.max   = String(MAX_BRUSH_SIZE);
+            this.sizeSlider.value = String(this.brushSize);
+            this.sizeSlider.title = '筆刷大小';
+        }
         this.sizeSlider.className = 'easynote-slider';
         this.sizeSlider.addEventListener('input', () => {
-            this.brushSize = parseInt(this.sizeSlider.value);
+            if ((this.settings.brushMode ?? 'steps') === 'steps') {
+                this.brushSize = BRUSH_STEPS[parseInt(this.sizeSlider.value) - 1];
+            } else {
+                this.brushSize = parseInt(this.sizeSlider.value);
+            }
             this.refreshStatus();
         });
 
@@ -1824,13 +1850,25 @@ class EasyNoteView extends ItemView {
             case '4': this.setColor(3); break;
             case '5': this.setColor(4); break;
             case '+': case '=':
-                this.brushSize        = Math.min(MAX_BRUSH_SIZE, this.brushSize + 2);
-                this.sizeSlider.value = String(this.brushSize);
+                if ((this.settings.brushMode ?? 'steps') === 'steps') {
+                    const ns = Math.min(7, brushSizeToStep(this.brushSize) + 1);
+                    this.brushSize        = BRUSH_STEPS[ns - 1];
+                    this.sizeSlider.value = String(ns);
+                } else {
+                    this.brushSize        = Math.min(MAX_BRUSH_SIZE, this.brushSize + 2);
+                    this.sizeSlider.value = String(this.brushSize);
+                }
                 this.refreshStatus();
                 break;
             case '-':
-                this.brushSize        = Math.max(MIN_BRUSH_SIZE, this.brushSize - 2);
-                this.sizeSlider.value = String(this.brushSize);
+                if ((this.settings.brushMode ?? 'steps') === 'steps') {
+                    const ps = Math.max(1, brushSizeToStep(this.brushSize) - 1);
+                    this.brushSize        = BRUSH_STEPS[ps - 1];
+                    this.sizeSlider.value = String(ps);
+                } else {
+                    this.brushSize        = Math.max(MIN_BRUSH_SIZE, this.brushSize - 2);
+                    this.sizeSlider.value = String(this.brushSize);
+                }
                 this.refreshStatus();
                 break;
             case '0':   // 重設縮放至 100%
@@ -3204,20 +3242,56 @@ class EasyNoteSettingTab extends PluginSettingTab {
                 });
             });
 
-        // 預設筆刷大小
+        // 筆刷模式
         new Setting(containerEl)
-            .setName('預設筆刷大小')
-            .setDesc(`開啟 EasyNote 時的預設筆刷大小（${MIN_BRUSH_SIZE}–${MAX_BRUSH_SIZE}）`)
-            .addSlider((slider) =>
-                slider
-                    .setLimits(MIN_BRUSH_SIZE, MAX_BRUSH_SIZE, 1)
-                    .setValue(this.plugin.settings.defaultBrushSize)
-                    .setDynamicTooltip()
-                    .onChange(async (value) => {
-                        this.plugin.settings.defaultBrushSize = value;
-                        await this.plugin.saveSettings();
-                    })
-            );
+            .setName('筆刷模式')
+            .setDesc('7 階模式：固定 7 個大小檔殔；連續模式：自由調整 1–60px')
+            .addDropdown((drop) => {
+                drop.addOption('steps', '7 階');
+                drop.addOption('continuous', '連續');
+                drop.setValue(this.plugin.settings.brushMode ?? 'steps');
+                drop.onChange(async (value) => {
+                    this.plugin.settings.brushMode = value as 'steps' | 'continuous';
+                    await this.plugin.saveSettings();
+                    this.display();
+                });
+            });
+
+        // 預設筆刷大小
+        if ((this.plugin.settings.brushMode ?? 'steps') === 'steps') {
+            const curStep = brushSizeToStep(this.plugin.settings.defaultBrushSize);
+            new Setting(containerEl)
+                .setName('預設筆刷大小')
+                .setDesc(`開啟 EasyNote 時的預設筆刷階數（7 階）`)
+                .addSlider((slider) =>
+                    slider
+                        .setLimits(1, 7, 1)
+                        .setValue(curStep)
+                        .setDynamicTooltip()
+                        .onChange(async (value) => {
+                            this.plugin.settings.defaultBrushSize = BRUSH_STEPS[value - 1];
+                            await this.plugin.saveSettings();
+                        })
+                );
+            containerEl.createEl('p', {
+                text: `7 階對應大小: ${BRUSH_STEPS.map((s, i) => `第${i+1}階=${s}px`).join(' / ')}`,
+                cls: 'setting-item-description',
+            });
+        } else {
+            new Setting(containerEl)
+                .setName('預設筆刷大小')
+                .setDesc(`開啟 EasyNote 時的預設筆刷大小（${MIN_BRUSH_SIZE}–${MAX_BRUSH_SIZE}px）`)
+                .addSlider((slider) =>
+                    slider
+                        .setLimits(MIN_BRUSH_SIZE, MAX_BRUSH_SIZE, 1)
+                        .setValue(this.plugin.settings.defaultBrushSize)
+                        .setDynamicTooltip()
+                        .onChange(async (value) => {
+                            this.plugin.settings.defaultBrushSize = value;
+                            await this.plugin.saveSettings();
+                        })
+                );
+        }
 
         // 預設五色筆顏色
         containerEl.createEl('h3', { text: '預設五色筆顏色' });
