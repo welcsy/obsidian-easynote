@@ -9,6 +9,7 @@ import {
     TFile,
     WorkspaceLeaf,
     normalizePath,
+    setIcon,
 } from 'obsidian';
 
 // ─── 常數（對應 EasyNote GDScript 的 COLORS / COLOR_NAMES）──────────────────
@@ -282,26 +283,26 @@ class EasyNoteView extends ItemView {
 
         // 橡皮擦（快捷 E）
         this.eraserBtn = row1.createEl('button', {
-            cls:   'easynote-btn',
-            text:  '橡皮擦 (E)',
-            title: '切換橡皮擦（快捷：E）',
+            cls:   'easynote-btn easynote-btn-icon',
+            title: '橡皮擦（快捷：E）',
         });
+        setIcon(this.eraserBtn, 'eraser');
         this.eraserBtn.addEventListener('click', () => this.toggleEraser());
 
         // 選取工具（快捷 S）
         this.selectBtn = row1.createEl('button', {
-            cls:   'easynote-btn',
-            text:  '選取 (S)',
+            cls:   'easynote-btn easynote-btn-icon',
             title: '選取並移動/縮放圖片（快捷：S）\nDel 刪除選取圖片',
         });
+        setIcon(this.selectBtn, 'mouse-pointer-2');
         this.selectBtn.addEventListener('click', () => this.setTool('select'));
 
         // 文字工具（快捷 T）
         this.textBtn = row1.createEl('button', {
-            cls:   'easynote-btn',
-            text:  '文字 (T)',
+            cls:   'easynote-btn easynote-btn-icon',
             title: '新增 / 編輯文字（快捷：T）',
         });
+        setIcon(this.textBtn, 'type');
         this.textBtn.addEventListener('click', () => this.setTool('text'));
 
         // 字體大小
@@ -327,10 +328,10 @@ class EasyNoteView extends ItemView {
 
         // 繪畫選取工具（快捷 M）
         this.paintSelectBtn = row1.createEl('button', {
-            cls:   'easynote-btn',
-            text:  '選取繪畫 (M)',
+            cls:   'easynote-btn easynote-btn-icon',
             title: '框選繪畫層區塊，可移動/縮放後再合併（快捷：M）\nEnter 確認　Esc 取消　Del 刪除選取區塊',
         });
+        setIcon(this.paintSelectBtn, 'lasso');
         this.paintSelectBtn.addEventListener('click', () => this.setTool('paintselect'));
 
         // 清除畫布（快捷 C）

@@ -1,7 +1,7 @@
 {
   "id": "easynote",
   "name": "Easy Note",
-  "version": "1.0.15",
+  "version": "1.0.16",
   "minAppVersion": "1.0.0",
   "description": "在 Obsidian 側邊欄開啟一個全功能的手繪畫布，支援多色畫筆、文字圖層、圖片圖層，並可將成果儲存為 PNG 到 Vault。",
   "author": "welcsy",

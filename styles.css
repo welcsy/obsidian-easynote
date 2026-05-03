@@ -161,6 +161,21 @@
     background: var(--background-modifier-hover);
 }
 
+/* 圖示按鈕（正方形，置中圖示） */
+.easynote-btn.easynote-btn-icon {
+    padding: 0;
+    width:   28px;
+    height:  28px;
+    display: flex;
+    align-items:     center;
+    justify-content: center;
+}
+.easynote-btn.easynote-btn-icon svg {
+    width:  16px;
+    height: 16px;
+    flex-shrink: 0;
+}
+
 /* 橡皮擦啟用時 */
 .easynote-btn.active {
     background:   var(--interactive-accent);
