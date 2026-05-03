@@ -494,6 +494,16 @@ class EasyNoteView extends ItemView {
         loadProjectBtn.addEventListener('click', () => {
             new VaultProjectPickerModal(this.app, (file) => this.loadProject(file)).open();
         });
+
+        // 載入筆記 (.md) 為文字圖層
+        const loadNoteBtn = row2.createEl('button', {
+            cls:   'easynote-btn',
+            text:  '載入筆記',
+            title: '將 Vault .md 筆記以純文字匯入為文字圖層',
+        });
+        loadNoteBtn.addEventListener('click', () => {
+            new VaultNotePickerModal(this.app, (file) => this.loadNoteAsText(file)).open();
+        });
         row2.createEl('div', { cls: 'easynote-sep' });
 
         // 儲存檔案
@@ -1773,6 +1783,53 @@ class EasyNoteView extends ItemView {
         this.refreshStatus();
     }
 
+    // ── 載入 .md 筆記為文字圖層 ───────────────────────────────────────────────
+    private stripMarkdown(md: string): string {
+        return md
+            .replace(/^---[\s\S]*?^---\s*\n?/m, '')         // frontmatter
+            .replace(/^#{1,6}\s+(.+)$/gm, '$1')             // 標題 # → 純文字
+            .replace(/\*\*\*(.+?)\*\*\*/g, '$1')            // bold+italic
+            .replace(/\*\*(.+?)\*\*/g, '$1')                // bold **
+            .replace(/__(.+?)__/g, '$1')                    // bold __
+            .replace(/\*(.+?)\*/g, '$1')                    // italic *
+            .replace(/_(.+?)_/g, '$1')                      // italic _
+            .replace(/~~(.+?)~~/g, '$1')                    // 刪除線
+            .replace(/```[\s\S]*?```/g, '')                 // 程式碼區塊（移除）
+            .replace(/`(.+?)`/g, '$1')                      // 行內程式碼
+            .replace(/^\s*[-*+]\s+/gm, '• ')               // 無序列表
+            .replace(/^\s*\d+\.\s+/gm, '')                 // 有序列表
+            .replace(/^>+\s*/gm, '')                        // 引用
+            .replace(/!\[\[.+?\]\]/g, '')                  // 圖片嵌入 ![[…]]
+            .replace(/\[\[(.+?)\|(.+?)\]\]/g, '$2')        // [[link|顯示文字]]
+            .replace(/\[\[(.+?)\]\]/g, '$1')               // [[wikilink]]
+            .replace(/\[(.+?)\]\(.+?\)/g, '$1')            // [文字](url)
+            .replace(/^[-*_]{3,}\s*$/gm, '')               // 水平線
+            .replace(/\n{3,}/g, '\n\n')                    // 折疊多餘空行
+            .trim();
+    }
+
+    private async loadNoteAsText(file: TFile): Promise<void> {
+        const raw     = await this.app.vault.read(file);
+        const text    = this.stripMarkdown(raw);
+        if (!text) { new Notice('筆記內容為空'); return; }
+        this.pushHistory();
+        const fontSize = 16;
+        const MARGIN   = 20;
+        this.textLayers.push({
+            text,
+            x:        MARGIN,
+            y:        MARGIN,
+            fontSize,
+            color:    '#000000',
+        });
+        this.selectedTextIdx = this.textLayers.length - 1;
+        this.selectedIdx     = -1;
+        this.setTool('select');
+        this.render();
+        this.refreshStatus();
+        new Notice(`已匯入筆記「${file.basename}」`);
+    }
+
     // ── 自動儲存 ──────────────────────────────────────────────────────────────
     /** 每次 render() 後呼叫；debounce 3 秒後寫出暫存檔 */
     private scheduleAutosave(): void {
@@ -2348,6 +2405,59 @@ class VaultImagePickerModal extends Modal {
     onClose(): void {
         this.contentEl.empty();
     }
+}
+
+// ─── Vault 筆記選擇 Modal ─────────────────────────────────────────────────────
+class VaultNotePickerModal extends Modal {
+    private onChoose:     (file: TFile) => void;
+    private searchInput!: HTMLInputElement;
+    private listEl!:      HTMLElement;
+
+    constructor(app: App, onChoose: (file: TFile) => void) {
+        super(app);
+        this.onChoose = onChoose;
+    }
+
+    onOpen(): void {
+        const { contentEl } = this;
+        contentEl.empty();
+        this.modalEl.addClass('easynote-project-picker-modal');
+        contentEl.createEl('h3', { text: '載入 .md 筆記為文字圖層' });
+
+        this.searchInput             = contentEl.createEl('input');
+        this.searchInput.type        = 'text';
+        this.searchInput.placeholder = '搜尋筆記名稱…';
+        this.searchInput.className   = 'easynote-picker-search';
+        this.searchInput.addEventListener('input', () => this.renderList());
+
+        this.listEl = contentEl.createEl('div', { cls: 'easynote-project-list' });
+        this.renderList();
+        setTimeout(() => this.searchInput.focus(), 50);
+    }
+
+    private getFiles(): TFile[] {
+        const query = this.searchInput?.value.toLowerCase() ?? '';
+        return this.app.vault.getMarkdownFiles()
+            .filter(f => !query || f.name.toLowerCase().includes(query) || f.path.toLowerCase().includes(query))
+            .sort((a, b) => b.stat.mtime - a.stat.mtime);
+    }
+
+    private renderList(): void {
+        this.listEl.empty();
+        const files = this.getFiles();
+        if (files.length === 0) {
+            this.listEl.createEl('div', { cls: 'easynote-picker-empty', text: '找不到 .md 筆記' });
+            return;
+        }
+        for (const file of files) {
+            const item = this.listEl.createEl('div', { cls: 'easynote-project-item' });
+            item.createEl('span', { cls: 'easynote-project-name', text: file.basename });
+            item.createEl('span', { cls: 'easynote-project-path', text: file.parent?.path ?? '/' });
+            item.addEventListener('click', () => { this.onChoose(file); this.close(); });
+        }
+    }
+
+    onClose(): void { this.contentEl.empty(); }
 }
 
 // ─── 主插件類別 ───────────────────────────────────────────────────────────────
