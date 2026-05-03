@@ -102,6 +102,15 @@ interface PaintFragment {
     h:  number;
 }
 
+/** 畫布歷史快照（用於 Undo/Redo） */
+interface HistoryEntry {
+    paintData:   ImageData;
+    imageLayers: { img: HTMLImageElement; x: number; y: number; w: number; h: number }[];
+    textLayers:  { text: string; x: number; y: number; fontSize: number; color: string }[];
+    canvasW:     number;
+    canvasH:     number;
+}
+
 // ─── 繪圖面板（ItemView）──────────────────────────────────────────────────────
 class EasyNoteView extends ItemView {
     private settings: EasyNoteSettings;
@@ -176,6 +185,17 @@ class EasyNoteView extends ItemView {
     private static readonly AUTOSAVE_DEBOUNCE_MS = 3000;   // 最後一次變更後 3 秒觸發
     private static readonly AUTOSAVE_FILENAME    = 'EasyNote-autosave.enote';
 
+    // 歷史記錄（Undo/Redo）
+    private history:   HistoryEntry[] = [];
+    private historyIdx = -1;
+    private static readonly MAX_HISTORY = 20;
+
+    // 內部剪貼簿（Ctrl+C / Ctrl+X）
+    private clipboard: { type: 'image'; img: HTMLImageElement; w: number; h: number }
+                     | { type: 'text';  layer: TextLayer }
+                     | { type: 'paint'; offscreen: HTMLCanvasElement; w: number; h: number }
+                     | null = null;
+
     // 事件繫結
     private _onKeyDown!: (e: KeyboardEvent)  => void;
     private _onPaste!:   (e: ClipboardEvent) => void;
@@ -235,6 +255,9 @@ class EasyNoteView extends ItemView {
                 clearTimeout(this.autoSaveTimer);
                 this.autoSaveTimer = null;
             }
+        } else {
+            // 沒有暫存檔，推入空白起始狀態
+            this.pushHistory();
         }
     }
 
@@ -566,6 +589,7 @@ class EasyNoteView extends ItemView {
                     if (h) {
                         const tl = this.textLayers[this.selectedTextIdx];
                         const b  = this.textBBox(tl);
+                        this.pushHistory();  // 拖曳彈物層前先存快照
                         this.textDragState = {
                             handle: h, startMX: mx, startMY: my,
                             startX: tl.x, startY: tl.y,
@@ -580,6 +604,7 @@ class EasyNoteView extends ItemView {
                     this.dragState       = null;
                     const tl = this.textLayers[hitText];
                     const b  = this.textBBox(tl);
+                    this.pushHistory();  // 移動文字圖層前先存快照
                     this.textDragState = {
                         handle: 'move', startMX: mx, startMY: my,
                         startX: tl.x, startY: tl.y,
@@ -593,6 +618,7 @@ class EasyNoteView extends ItemView {
                     const h = this.hitHandle(mx, my, this.imageLayers[this.selectedIdx]);
                     if (h) {
                         const lay = this.imageLayers[this.selectedIdx];
+                        this.pushHistory();  // 縮放圖片層前先存快照
                         this.dragState = { handle: h, startMX: mx, startMY: my,
                             startX: lay.x, startY: lay.y, startW: lay.w, startH: lay.h };
                         return;
@@ -607,12 +633,14 @@ class EasyNoteView extends ItemView {
                 this.selectedTextIdx = -1;
                 if (hit >= 0) {
                     const lay = this.imageLayers[hit];
+                    this.pushHistory();  // 移動圖片層前先存快照
                     this.dragState = { handle: 'move', startMX: mx, startMY: my,
                         startX: lay.x, startY: lay.y, startW: lay.w, startH: lay.h };
                 }
                 this.render();
             } else {
                 // 畫筆 / 橡皮擦
+                this.pushHistory();  // 每次筆觸開始前保存快照
                 this.drawing = true;
                 this.prevX = mx; this.prevY = my;
                 this.paintDot(mx, my);
@@ -893,6 +921,7 @@ class EasyNoteView extends ItemView {
     }
 
     setCanvasSize(w: number, h: number): void {
+        this.pushHistory();                 // 調整畫布前先存快照
         this.manualWidth  = w;
         this.manualHeight = h;
         this.applyCanvasSize(w, h);
@@ -1097,6 +1126,7 @@ class EasyNoteView extends ItemView {
 
     private commitFragment(): void {
         if (!this.paintFragment) return;
+        this.pushHistory();                 // 合併繪畫區塊前先存快照
         const f = this.paintFragment;
         this.paintCtx.drawImage(f.offscreen, 0, 0, f.offscreen.width, f.offscreen.height, f.x, f.y, f.w, f.h);
         this.paintFragment = null;
@@ -1228,6 +1258,7 @@ class EasyNoteView extends ItemView {
     }
 
     private clearCanvas(): void {
+        this.pushHistory();                 // 清除前先存快照
         this.paintCtx.clearRect(0, 0, this.paintCanvas.width, this.paintCanvas.height);
         this.imageLayers     = [];
         this.textLayers      = [];
@@ -1292,6 +1323,7 @@ class EasyNoteView extends ItemView {
         this._textEditing = null;
         const text = state.el.value;
         state.el.remove();
+        this.pushHistory();                 // 文字確認前先存快照
 
         if (text.trim()) {
             const fontSize = state.layerIdx >= 0 ? this.textLayers[state.layerIdx].fontSize : this.textFontSize;
@@ -1338,6 +1370,7 @@ class EasyNoteView extends ItemView {
             const h = Math.round(img.naturalHeight * scale);
             const x = Math.round((cw - w) / 2);
             const y = Math.round((ch - h) / 2);
+            this.pushHistory();             // 圖片對入前先存快照
             this.imageLayers.push({ img, x, y, w, h });
             this.selectedIdx = this.imageLayers.length - 1;
             this.setTool('select');   // 載入後自動切到選取模式
@@ -1431,6 +1464,35 @@ class EasyNoteView extends ItemView {
         const tag = (e.target as HTMLElement)?.tagName;
         if (tag === 'INPUT' || tag === 'TEXTAREA') return;
 
+        // ── Ctrl / Meta 組合鍵 ────────────────────────────────────────────────
+        if (e.ctrlKey || e.metaKey) {
+            switch (e.key.toLowerCase()) {
+                case 'z':
+                    e.preventDefault();
+                    this.undo();
+                    return;
+                case 'y':
+                    e.preventDefault();
+                    this.redo();
+                    return;
+                case 'c':
+                    e.preventDefault();
+                    this.copySelection();
+                    return;
+                case 'x':
+                    e.preventDefault();
+                    this.cutSelection();
+                    return;
+                case 'v':
+                    // 內部剪貼簿貼上（系統剪貼簿圖片由 handlePaste 處理）
+                    if (this.clipboard) {
+                        e.preventDefault();
+                        this.pasteClipboard();
+                    }
+                    return;
+            }
+        }
+
         switch (e.key) {
             case 's': case 'S':
                 this.setTool(this.tool === 'select' ? 'draw' : 'select');
@@ -1462,11 +1524,13 @@ class EasyNoteView extends ItemView {
             case 'Delete': case 'Backspace':
                 if (this.tool === 'select') {
                     if (this.selectedIdx >= 0) {
+                        this.pushHistory();
                         this.imageLayers.splice(this.selectedIdx, 1);
                         this.selectedIdx = -1;
                         this.render();
                         this.refreshStatus();
                     } else if (this.selectedTextIdx >= 0) {
+                        this.pushHistory();
                         this.textLayers.splice(this.selectedTextIdx, 1);
                         this.selectedTextIdx = -1;
                         this.render();
@@ -1474,6 +1538,7 @@ class EasyNoteView extends ItemView {
                     }
                 } else if (this.tool === 'paintselect' && this.paintFragment) {
                     // 棄用 fragment（不還原到畫布）
+                    this.pushHistory();
                     this.paintFragment = null;
                     this.paintFragDrag = null;
                     this.render();
@@ -1517,6 +1582,195 @@ class EasyNoteView extends ItemView {
                 return;
             }
         }
+    }
+
+    // ── 歷史記錄（Undo / Redo）────────────────────────────────────────────────
+    private pushHistory(): void {
+        // 截斷 redo 分支
+        this.history.splice(this.historyIdx + 1);
+        const entry: HistoryEntry = {
+            paintData:   this.paintCtx.getImageData(0, 0, this.paintCanvas.width, this.paintCanvas.height),
+            imageLayers: this.imageLayers.map(l => ({ img: l.img, x: l.x, y: l.y, w: l.w, h: l.h })),
+            textLayers:  this.textLayers.map(tl => ({ ...tl })),
+            canvasW:     this.canvas.width,
+            canvasH:     this.canvas.height,
+        };
+        this.history.push(entry);
+        if (this.history.length > EasyNoteView.MAX_HISTORY) {
+            this.history.shift();   // 超過上限，丟棄最舊的（idx 不變，指向末尾）
+        } else {
+            this.historyIdx = this.history.length - 1;
+        }
+    }
+
+    private restoreHistory(entry: HistoryEntry): void {
+        // 若畫布尺寸不同需先調整
+        if (this.canvas.width !== entry.canvasW || this.canvas.height !== entry.canvasH) {
+            this.canvas.width       = entry.canvasW;
+            this.canvas.height      = entry.canvasH;
+            this.paintCanvas.width  = entry.canvasW;
+            this.paintCanvas.height = entry.canvasH;
+            this.manualWidth        = entry.canvasW;
+            this.manualHeight       = entry.canvasH;
+        }
+        this.paintCtx.clearRect(0, 0, this.paintCanvas.width, this.paintCanvas.height);
+        this.paintCtx.putImageData(entry.paintData, 0, 0);
+        this.imageLayers     = entry.imageLayers.map(l => ({ ...l }));
+        this.textLayers      = entry.textLayers.map(tl => ({ ...tl }));
+        this.selectedIdx     = -1;
+        this.selectedTextIdx = -1;
+        this.paintFragment   = null;
+        this.paintFragDrag   = null;
+        this.render();
+    }
+
+    undo(): void {
+        if (this.historyIdx <= 0) return;
+        this.historyIdx--;
+        this.restoreHistory(this.history[this.historyIdx]);
+    }
+
+    redo(): void {
+        if (this.historyIdx >= this.history.length - 1) return;
+        this.historyIdx++;
+        this.restoreHistory(this.history[this.historyIdx]);
+    }
+
+    // ── 複製 / 剪下 / 貼上（內部剪貼簿）─────────────────────────────────────
+    private copySelection(): void {
+        if (this.tool === 'select') {
+            if (this.selectedIdx >= 0 && this.selectedIdx < this.imageLayers.length) {
+                const l = this.imageLayers[this.selectedIdx];
+                this.clipboard = { type: 'image', img: l.img, w: l.w, h: l.h };
+                new Notice('已複製圖片圖層');
+            } else if (this.selectedTextIdx >= 0 && this.selectedTextIdx < this.textLayers.length) {
+                this.clipboard = { type: 'text', layer: { ...this.textLayers[this.selectedTextIdx] } };
+                new Notice('已複製文字圖層');
+            }
+        } else if (this.tool === 'paintselect') {
+            if (this.paintFragment) {
+                // 複製浮動中的繪畫區塊
+                const copy = document.createElement('canvas');
+                copy.width  = this.paintFragment.offscreen.width;
+                copy.height = this.paintFragment.offscreen.height;
+                copy.getContext('2d')!.drawImage(this.paintFragment.offscreen, 0, 0);
+                this.clipboard = { type: 'paint', offscreen: copy, w: this.paintFragment.w, h: this.paintFragment.h };
+                new Notice('已複製繪畫選取');
+            } else {
+                const r = this.getSelRect();
+                if (r) {
+                    const copy = document.createElement('canvas');
+                    copy.width  = r.w;
+                    copy.height = r.h;
+                    copy.getContext('2d')!.drawImage(this.paintCanvas, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
+                    this.clipboard = { type: 'paint', offscreen: copy, w: r.w, h: r.h };
+                    new Notice('已複製繪畫選取');
+                }
+            }
+        }
+    }
+
+    private cutSelection(): void {
+        if (this.tool === 'select') {
+            if (this.selectedIdx >= 0 && this.selectedIdx < this.imageLayers.length) {
+                const l = this.imageLayers[this.selectedIdx];
+                this.clipboard = { type: 'image', img: l.img, w: l.w, h: l.h };
+                this.pushHistory();
+                this.imageLayers.splice(this.selectedIdx, 1);
+                this.selectedIdx = -1;
+                this.render();
+                this.refreshStatus();
+                new Notice('已剪下圖片圖層');
+            } else if (this.selectedTextIdx >= 0 && this.selectedTextIdx < this.textLayers.length) {
+                this.clipboard = { type: 'text', layer: { ...this.textLayers[this.selectedTextIdx] } };
+                this.pushHistory();
+                this.textLayers.splice(this.selectedTextIdx, 1);
+                this.selectedTextIdx = -1;
+                this.render();
+                this.refreshStatus();
+                new Notice('已剪下文字圖層');
+            }
+        } else if (this.tool === 'paintselect') {
+            if (this.paintFragment) {
+                // 浮動中的繪畫區塊已從畫布提取，直接存入剪貼簿
+                const copy = document.createElement('canvas');
+                copy.width  = this.paintFragment.offscreen.width;
+                copy.height = this.paintFragment.offscreen.height;
+                copy.getContext('2d')!.drawImage(this.paintFragment.offscreen, 0, 0);
+                this.clipboard = { type: 'paint', offscreen: copy, w: this.paintFragment.w, h: this.paintFragment.h };
+                // 捨棄浮動區塊（洞保留在畫布上）
+                this.paintFragment = null;
+                this.paintFragDrag = null;
+                this.render();
+                new Notice('已剪下繪畫選取');
+            } else {
+                const r = this.getSelRect();
+                if (r) {
+                    this.pushHistory();
+                    const copy = document.createElement('canvas');
+                    copy.width  = r.w;
+                    copy.height = r.h;
+                    copy.getContext('2d')!.drawImage(this.paintCanvas, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
+                    this.clipboard = { type: 'paint', offscreen: copy, w: r.w, h: r.h };
+                    // 從畫布挖空選取區
+                    this.paintCtx.save();
+                    this.paintCtx.globalCompositeOperation = 'destination-out';
+                    this.paintCtx.fillStyle = 'rgba(0,0,0,1)';
+                    this.paintCtx.fillRect(r.x, r.y, r.w, r.h);
+                    this.paintCtx.restore();
+                    this.selStart   = null;
+                    this.selCurrent = null;
+                    this.render();
+                    new Notice('已剪下繪畫選取');
+                }
+            }
+        }
+    }
+
+    private pasteClipboard(): void {
+        if (!this.clipboard) return;
+        if (this.clipboard.type === 'paint') {
+            // 先把現有浮動區塊合併入畫布（不另外佔一筆歷史）
+            if (this.paintFragment) {
+                const f = this.paintFragment;
+                this.paintCtx.drawImage(f.offscreen, 0, 0, f.offscreen.width, f.offscreen.height, f.x, f.y, f.w, f.h);
+                this.paintFragment = null;
+                this.paintFragDrag = null;
+            }
+            this.pushHistory();
+            const c = this.clipboard;
+            const px = Math.max(0, Math.floor((this.canvas.width  - c.w) / 2));
+            const py = Math.max(0, Math.floor((this.canvas.height - c.h) / 2));
+            const newOffscreen = document.createElement('canvas');
+            newOffscreen.width  = c.offscreen.width;
+            newOffscreen.height = c.offscreen.height;
+            newOffscreen.getContext('2d')!.drawImage(c.offscreen, 0, 0);
+            this.paintFragment = { offscreen: newOffscreen, x: px, y: py, w: c.w, h: c.h };
+            this.setTool('paintselect');
+            this.render();
+            this.refreshStatus();
+            new Notice('已貼上繪畫');
+            return;
+        }
+        this.pushHistory();
+        const OFFSET = 20;
+        if (this.clipboard.type === 'image') {
+            const c = this.clipboard;
+            const x = Math.min(OFFSET, this.canvas.width  - c.w);
+            const y = Math.min(OFFSET, this.canvas.height - c.h);
+            this.imageLayers.push({ img: c.img, x, y, w: c.w, h: c.h });
+            this.selectedIdx     = this.imageLayers.length - 1;
+            this.selectedTextIdx = -1;
+            this.setTool('select');
+        } else {
+            const src = this.clipboard.layer;
+            this.textLayers.push({ ...src, x: src.x + OFFSET, y: src.y + OFFSET });
+            this.selectedTextIdx = this.textLayers.length - 1;
+            this.selectedIdx     = -1;
+            this.setTool('select');
+        }
+        this.render();
+        this.refreshStatus();
     }
 
     // ── 自動儲存 ──────────────────────────────────────────────────────────────
@@ -1664,6 +1918,10 @@ class EasyNoteView extends ItemView {
             this.setTool('draw');
             this.applyZoom();
             this.render();
+            // 重置歷史記錄，載入狀態作為起點
+            this.history    = [];
+            this.historyIdx = -1;
+            this.pushHistory();
             new Notice('EasyNote：專案已載入');
         } catch (err) {
             new Notice(`✗ 載入專案失敗: ${err}`);
