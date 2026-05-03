@@ -47,6 +47,7 @@ interface EasyNoteSettings {
     saveFolder:       string;
     defaultColors:    string[];
     brushMode:        'steps' | 'continuous';
+    startupMode:      'previous' | 'new';
 }
 const DEFAULT_SETTINGS: EasyNoteSettings = {
     defaultColorIdx:  0,
@@ -54,6 +55,7 @@ const DEFAULT_SETTINGS: EasyNoteSettings = {
     saveFolder:       'EasyNote',
     defaultColors:    [...COLORS],
     brushMode:        'steps',
+    startupMode:      'new',
 };
 
 // ─── .enote 專案格式 ──────────────────────────────────────────────────────────
@@ -329,12 +331,12 @@ class EasyNoteView extends ItemView {
         this.refreshColorBtns();
         this.refreshStatus();
 
-        // 嘗試載入自動儲存的暫存檔
+        // 啟動模式：載入自動暗存 or 新畫布
         const autosavePath = normalizePath(
             `${this.settings.saveFolder}/${EasyNoteView.AUTOSAVE_FILENAME}`
         );
         const autosaveFile = this.app.vault.getAbstractFileByPath(autosavePath);
-        if (autosaveFile instanceof TFile) {
+        if ((this.settings.startupMode ?? 'new') === 'previous' && autosaveFile instanceof TFile) {
             await this.loadProject(autosaveFile);
             // loadProject 裡的 render() 會排程 autosave，取消避免立即覆寫
             if (this.autoSaveTimer !== null) {
@@ -342,7 +344,7 @@ class EasyNoteView extends ItemView {
                 this.autoSaveTimer = null;
             }
         } else {
-            // 沒有暫存檔，推入空白起始狀態
+            // 新畫布：推入空白起始狀態
             this.pushHistory();
         }
     }
@@ -352,12 +354,24 @@ class EasyNoteView extends ItemView {
         if (this._mdEditing)   { this._mdEditing.el.remove();   this._mdEditing   = null; }
         if (this._vaultModifyRef) { this.app.vault.offref(this._vaultModifyRef); this._vaultModifyRef = null; }
         if (this.paintFragment) this.commitFragment();
-        // 取消 debounce，立即寫出最新狀態
+        // 取消 debounce
         if (this.autoSaveTimer !== null) {
             clearTimeout(this.autoSaveTimer);
             this.autoSaveTimer = null;
         }
-        this.autoSaveDirect();
+        if ((this.settings.startupMode ?? 'new') === 'previous') {
+            // 打開前一次模式：寫出最新暫存
+            this.autoSaveDirect();
+        } else {
+            // 新畫布模式：刪除 autosave檔避免下次啟動載入
+            const autosavePath = normalizePath(
+                `${this.settings.saveFolder}/${EasyNoteView.AUTOSAVE_FILENAME}`
+            );
+            const autosaveFile = this.app.vault.getAbstractFileByPath(autosavePath);
+            if (autosaveFile instanceof TFile) {
+                try { await this.app.vault.delete(autosaveFile); } catch (_) {}
+            }
+        }
         document.removeEventListener('keydown', this._onKeyDown);
         document.removeEventListener('paste',   this._onPaste);
         window.removeEventListener('resize',    this._onResize);
@@ -3350,6 +3364,20 @@ class EasyNoteSettingTab extends PluginSettingTab {
                     });
                 });
         }
+
+        // 啟動畫布模式
+        new Setting(containerEl)
+            .setName('啟動畫布模式')
+            .setDesc('開啟 EasyNote 時要呼叫前一次的畫布，還是呼叫對新畫布？選择「呼叫新畫布」時，關閉時會刪除自動暫存檔。')
+            .addDropdown((drop) => {
+                drop.addOption('new',      '呼叫新畫布（預設）');
+                drop.addOption('previous', '打開前一次');
+                drop.setValue(this.plugin.settings.startupMode ?? 'new');
+                drop.onChange(async (value) => {
+                    this.plugin.settings.startupMode = value as 'previous' | 'new';
+                    await this.plugin.saveSettings();
+                });
+            });
 
         // 儲存資料夾
         new Setting(containerEl)
