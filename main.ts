@@ -43,15 +43,17 @@ const DEFAULT_SETTINGS: EasyNoteSettings = {
 };
 
 // ─── .enote 專案格式 ──────────────────────────────────────────────────────────
-interface ENoteImageLayer { src: string; x: number; y: number; w: number; h: number; }
-interface ENoteTextLayer  { text: string; x: number; y: number; fontSize: number; color: string; }
+interface ENoteImageLayer    { src: string; x: number; y: number; w: number; h: number; }
+interface ENoteTextLayer     { text: string; x: number; y: number; fontSize: number; color: string; linkedNotePath?: string; }
+interface ENoteMarkdownLayer { text: string; x: number; y: number; fontSize: number; color: string; width: number; linkedNotePath?: string; }
 interface ENote {
-    version:      number;
-    canvasWidth:  number;
-    canvasHeight: number;
-    paintLayer:   string;            // data:image/png;base64,...
-    imageLayers:  ENoteImageLayer[];
-    textLayers:   ENoteTextLayer[];
+    version:        number;
+    canvasWidth:    number;
+    canvasHeight:   number;
+    paintLayer:     string;            // data:image/png;base64,...
+    imageLayers:    ENoteImageLayer[];
+    markdownLayers: ENoteMarkdownLayer[];
+    textLayers:     ENoteTextLayer[];
 }
 
 interface ImageLayer {
@@ -75,11 +77,12 @@ interface DragState {
 }
 
 interface TextLayer {
-    text:     string;
-    x:        number;
-    y:        number;
-    fontSize: number;
-    color:    string;
+    text:           string;
+    x:              number;
+    y:              number;
+    fontSize:       number;
+    color:          string;
+    linkedNotePath?: string;  // 連結到 Vault .md 筆記的路徑（開啟時自動更新內容）
 }
 
 interface TextDragState {
@@ -102,13 +105,46 @@ interface PaintFragment {
     h:  number;
 }
 
+/** 行內 Markdown 片段（用於 MarkdownLayer 渲染） */
+interface InlineSeg {
+    text:    string;
+    bold?:   boolean;
+    italic?: boolean;
+    code?:   boolean;
+    link?:   boolean;
+}
+
+/** MarkdownLayer：以 Markdown 語法渲染的內容圖層 */
+interface MarkdownLayer {
+    text:            string;
+    x:               number;
+    y:               number;
+    fontSize:        number;
+    color:           string;
+    width:           number;           // 最大內容寬度（自動換行）
+    linkedNotePath?: string;           // 連結 Vault .md 路徑
+    _cachedH?:       number;           // 執行期快取高度，不序列化
+}
+
+interface MdDragState {
+    handle:        HandleType;
+    startMX:       number;
+    startMY:       number;
+    startX:        number;
+    startY:        number;
+    startFontSize: number;
+    startWidth:    number;
+    startH:        number;
+}
+
 /** 畫布歷史快照（用於 Undo/Redo） */
 interface HistoryEntry {
-    paintData:   ImageData;
-    imageLayers: { img: HTMLImageElement; x: number; y: number; w: number; h: number }[];
-    textLayers:  { text: string; x: number; y: number; fontSize: number; color: string }[];
-    canvasW:     number;
-    canvasH:     number;
+    paintData:      ImageData;
+    imageLayers:    { img: HTMLImageElement; x: number; y: number; w: number; h: number }[];
+    markdownLayers: { text: string; x: number; y: number; fontSize: number; color: string; width: number; linkedNotePath?: string }[];
+    textLayers:     { text: string; x: number; y: number; fontSize: number; color: string; linkedNotePath?: string }[];
+    canvasW:        number;
+    canvasH:        number;
 }
 
 // ─── 繪圖面板（ItemView）──────────────────────────────────────────────────────
@@ -131,6 +167,11 @@ class EasyNoteView extends ItemView {
     private selectedIdx = -1;
     private dragState:   DragState | null = null;
 
+    // Markdown 圖層（介於圖片層與文字層之間）
+    private markdownLayers:  MarkdownLayer[]    = [];
+    private selectedMdIdx    = -1;
+    private mdDragState:     MdDragState | null  = null;
+
     // 文字圖層
     private textLayers:      TextLayer[]        = [];
     private selectedTextIdx  = -1;
@@ -138,6 +179,9 @@ class EasyNoteView extends ItemView {
     private textFontSize     = 24;
     private _textEditing: {
         el: HTMLTextAreaElement; layerIdx: number; x: number; y: number;
+    } | null = null;
+    private _mdEditing: {
+        el: HTMLTextAreaElement; layerIdx: number;
     } | null = null;
 
     // 繪畫選取（paintselect）
@@ -191,15 +235,19 @@ class EasyNoteView extends ItemView {
     private static readonly MAX_HISTORY = 20;
 
     // 內部剪貼簿（Ctrl+C / Ctrl+X）
-    private clipboard: { type: 'image'; img: HTMLImageElement; w: number; h: number }
-                     | { type: 'text';  layer: TextLayer }
-                     | { type: 'paint'; offscreen: HTMLCanvasElement; w: number; h: number }
+    private clipboard: { type: 'image';    img: HTMLImageElement; w: number; h: number }
+                     | { type: 'text';     layer: TextLayer }
+                     | { type: 'markdown'; layer: MarkdownLayer }
+                     | { type: 'paint';    offscreen: HTMLCanvasElement; w: number; h: number }
                      | null = null;
 
     // 事件繫結
     private _onKeyDown!: (e: KeyboardEvent)  => void;
     private _onPaste!:   (e: ClipboardEvent) => void;
     private _onResize!:  ()                  => void;
+    // Vault 檔案變更監聽（雙向同步）
+    private _vaultModifyRef:      import('obsidian').EventRef | null = null;
+    private _suppressVaultModify  = false;
 
     constructor(leaf: WorkspaceLeaf, settings: EasyNoteSettings) {
         super(leaf);
@@ -240,6 +288,27 @@ class EasyNoteView extends ItemView {
         document.addEventListener('paste',   this._onPaste);
         window.addEventListener('resize',    this._onResize);
 
+        // Vault 檔案變更 → 更新連結圖層（Vault → EasyNote 雙向同步）
+        this._vaultModifyRef = this.app.vault.on('modify', async (file) => {
+            if (this._suppressVaultModify) return;
+            if (!(file instanceof TFile)) return;
+            let changed = false;
+            for (const ml of this.markdownLayers) {
+                if (ml.linkedNotePath === file.path) {
+                    ml.text     = await this.app.vault.read(file);
+                    ml._cachedH = undefined;
+                    changed = true;
+                }
+            }
+            for (const tl of this.textLayers) {
+                if (tl.linkedNotePath === file.path) {
+                    tl.text = await this.app.vault.read(file);
+                    changed = true;
+                }
+            }
+            if (changed) this.render();
+        });
+
         this.refreshColorBtns();
         this.refreshStatus();
 
@@ -263,6 +332,8 @@ class EasyNoteView extends ItemView {
 
     async onClose(): Promise<void> {
         if (this._textEditing) { this._textEditing.el.remove(); this._textEditing = null; }
+        if (this._mdEditing)   { this._mdEditing.el.remove();   this._mdEditing   = null; }
+        if (this._vaultModifyRef) { this.app.vault.offref(this._vaultModifyRef); this._vaultModifyRef = null; }
         if (this.paintFragment) this.commitFragment();
         // 取消 debounce，立即寫出最新狀態
         if (this.autoSaveTimer !== null) {
@@ -494,6 +565,16 @@ class EasyNoteView extends ItemView {
         loadProjectBtn.addEventListener('click', () => {
             new VaultProjectPickerModal(this.app, (file) => this.loadProject(file)).open();
         });
+
+        // 載入筆記 — 將 Vault .md 對映為連結 Markdown 圖層
+        const loadNoteBtn = row2.createEl('button', {
+            cls:   'easynote-btn',
+            text:  '載入筆記',
+            title: '將 Vault .md 筆記以 Markdown 圖層載入（每次開啟自動更新）',
+        });
+        loadNoteBtn.addEventListener('click', () => {
+            new VaultNotePickerModal(this.app, (file) => this.addLinkedMarkdownLayer(file)).open();
+        });
         row2.createEl('div', { cls: 'easynote-sep' });
 
         // 儲存檔案
@@ -601,7 +682,9 @@ class EasyNoteView extends ItemView {
                 if (hitText >= 0) {
                     this.selectedTextIdx = hitText;
                     this.selectedIdx     = -1;
+                    this.selectedMdIdx   = -1;
                     this.dragState       = null;
+                    this.mdDragState     = null;
                     const tl = this.textLayers[hitText];
                     const b  = this.textBBox(tl);
                     this.pushHistory();  // 移動文字圖層前先存快照
@@ -609,6 +692,42 @@ class EasyNoteView extends ItemView {
                         handle: 'move', startMX: mx, startMY: my,
                         startX: tl.x, startY: tl.y,
                         startFontSize: tl.fontSize, startW: b.w, startH: b.h,
+                    };
+                    this.render();
+                    return;
+                }
+                // 檢查 Markdown 圖層（已選取的先檢查控點）
+                if (this.selectedMdIdx >= 0 && this.selectedMdIdx < this.markdownLayers.length) {
+                    const h = this.hitMdHandle(mx, my, this.markdownLayers[this.selectedMdIdx]);
+                    if (h) {
+                        const ml = this.markdownLayers[this.selectedMdIdx];
+                        const b  = this.mdBBox(ml);
+                        this.pushHistory();
+                        this.mdDragState = {
+                            handle: h, startMX: mx, startMY: my,
+                            startX: ml.x, startY: ml.y,
+                            startFontSize: ml.fontSize, startWidth: ml.width, startH: b.h,
+                        };
+                        return;
+                    }
+                }
+                let hitMd = -1;
+                for (let i = this.markdownLayers.length - 1; i >= 0; i--) {
+                    if (this.pointInMd(mx, my, this.markdownLayers[i])) { hitMd = i; break; }
+                }
+                if (hitMd >= 0) {
+                    this.selectedMdIdx   = hitMd;
+                    this.selectedIdx     = -1;
+                    this.selectedTextIdx = -1;
+                    this.dragState       = null;
+                    this.textDragState   = null;
+                    const ml = this.markdownLayers[hitMd];
+                    const b  = this.mdBBox(ml);
+                    this.pushHistory();
+                    this.mdDragState = {
+                        handle: 'move', startMX: mx, startMY: my,
+                        startX: ml.x, startY: ml.y,
+                        startFontSize: ml.fontSize, startWidth: ml.width, startH: b.h,
                     };
                     this.render();
                     return;
@@ -631,6 +750,7 @@ class EasyNoteView extends ItemView {
                 }
                 this.selectedIdx     = hit;
                 this.selectedTextIdx = -1;
+                this.selectedMdIdx   = -1;
                 if (hit >= 0) {
                     const lay = this.imageLayers[hit];
                     this.pushHistory();  // 移動圖片層前先存快照
@@ -659,6 +779,46 @@ class EasyNoteView extends ItemView {
             if (this.tool === 'select') {
                 // 更新游標
                 this.updateCursor(mx, my);
+
+                // Markdown 拖曳 / 縮放
+                if (this.mdDragState && this.selectedMdIdx >= 0) {
+                    const md  = this.mdDragState;
+                    const ml  = this.markdownLayers[this.selectedMdIdx];
+                    const dx  = mx - md.startMX;
+                    const MIN_FONT  = 8;
+                    const MIN_WIDTH = 40;
+                    if (md.handle === 'move') {
+                        ml.x = md.startX + dx;
+                        ml.y = md.startY + (my - md.startMY);
+                    } else if (md.handle === 'se') {
+                        const nw    = Math.max(MIN_WIDTH, md.startWidth + dx);
+                        const scale = nw / md.startWidth;
+                        ml.fontSize = Math.max(MIN_FONT, md.startFontSize * scale);
+                        ml.width    = nw;
+                    } else if (md.handle === 'ne') {
+                        const nw    = Math.max(MIN_WIDTH, md.startWidth + dx);
+                        const scale = nw / md.startWidth;
+                        ml.fontSize = Math.max(MIN_FONT, md.startFontSize * scale);
+                        ml.width    = nw;
+                        ml.y        = md.startY + (md.startH - md.startH * scale);
+                    } else if (md.handle === 'sw') {
+                        const nw    = Math.max(MIN_WIDTH, md.startWidth - dx);
+                        const scale = nw / md.startWidth;
+                        ml.fontSize = Math.max(MIN_FONT, md.startFontSize * scale);
+                        ml.width    = nw;
+                        ml.x        = md.startX + (md.startWidth - nw);
+                    } else { // nw
+                        const nw    = Math.max(MIN_WIDTH, md.startWidth - dx);
+                        const scale = nw / md.startWidth;
+                        ml.fontSize = Math.max(MIN_FONT, md.startFontSize * scale);
+                        ml.width    = nw;
+                        ml.x        = md.startX + (md.startWidth - nw);
+                        ml.y        = md.startY + (md.startH - md.startH * scale);
+                    }
+                    ml._cachedH = undefined;
+                    this.render();
+                    return;
+                }
 
                 // 文字拖曳 / 縮放
                 if (this.textDragState && this.selectedTextIdx >= 0) {
@@ -829,20 +989,28 @@ class EasyNoteView extends ItemView {
             this.drawing       = false;
             this.dragState     = null;
             this.textDragState = null;
+            this.mdDragState   = null;
         });
         this.canvas.addEventListener('mouseleave', () => {
             this.isPanning     = false;
             this.drawing       = false;
             this.dragState     = null;
             this.textDragState = null;
+            this.mdDragState   = null;
             this.paintFragDrag = null;
             if (this.selStart) { this.selStart = null; this.selCurrent = null; this.render(); }
         });
 
-        // 雙擊選取模式下編輯文字
+        // 雙擊選取模式下編輯文字 / Markdown
         this.canvas.addEventListener('dblclick', (e) => {
             if (this.tool !== 'select') return;
             const { x: mx, y: my } = this.toCanvasCoords(e);
+            for (let i = this.markdownLayers.length - 1; i >= 0; i--) {
+                if (this.pointInMd(mx, my, this.markdownLayers[i])) {
+                    this.openMarkdownEditor(i);
+                    return;
+                }
+            }
             for (let i = this.textLayers.length - 1; i >= 0; i--) {
                 if (this.pointInText(mx, my, this.textLayers[i])) {
                     this.openTextEditor(this.textLayers[i].x, this.textLayers[i].y, i);
@@ -949,6 +1117,10 @@ class EasyNoteView extends ItemView {
         for (const lay of this.imageLayers) {
             this.ctx.drawImage(lay.img, lay.x, lay.y, lay.w, lay.h);
         }
+        // 2b. Markdown 圖層（圖片層上方）
+        for (const ml of this.markdownLayers) {
+            ml._cachedH = this.drawMarkdownContent(this.ctx, ml);
+        }
         // 3. 文字層（圖片上方，繪畫層下方）
         for (const tl of this.textLayers) {
             this.ctx.save();
@@ -973,6 +1145,9 @@ class EasyNoteView extends ItemView {
         if (this.tool === 'select') {
             if (this.selectedIdx >= 0) {
                 this.drawSelectionHandles(this.imageLayers[this.selectedIdx]);
+            }
+            if (this.selectedMdIdx >= 0 && this.selectedMdIdx < this.markdownLayers.length) {
+                this.drawMdSelectionBox(this.markdownLayers[this.selectedMdIdx]);
             }
             if (this.selectedTextIdx >= 0 && this.selectedTextIdx < this.textLayers.length) {
                 this.drawTextSelectionBox(this.textLayers[this.selectedTextIdx]);
@@ -1063,8 +1238,9 @@ class EasyNoteView extends ItemView {
 
     private drawTextSelectionBox(tl: TextLayer): void {
         const b = this.textBBox(tl);
+        const linked = !!tl.linkedNotePath;
         this.ctx.save();
-        this.ctx.strokeStyle = '#0066ff';
+        this.ctx.strokeStyle = linked ? '#22aa44' : '#0066ff';
         this.ctx.lineWidth   = 1.5;
         this.ctx.setLineDash([5, 3]);
         this.ctx.strokeRect(b.x - 2, b.y - 2, b.w + 4, b.h + 4);
@@ -1075,7 +1251,7 @@ class EasyNoteView extends ItemView {
             this.ctx.save();
             this.ctx.setLineDash([]);
             this.ctx.fillStyle   = '#ffffff';
-            this.ctx.strokeStyle = '#0066ff';
+            this.ctx.strokeStyle = linked ? '#22aa44' : '#0066ff';
             this.ctx.lineWidth   = 1.5;
             this.ctx.fillRect(cx - hs, cy - hs, HANDLE_SIZE, HANDLE_SIZE);
             this.ctx.strokeRect(cx - hs, cy - hs, HANDLE_SIZE, HANDLE_SIZE);
@@ -1183,7 +1359,7 @@ class EasyNoteView extends ItemView {
     }
 
     private updateCursor(mx: number, my: number): void {
-        if (this.dragState || this.textDragState) return;
+        if (this.dragState || this.textDragState || this.mdDragState) return;
         if (this.selectedIdx >= 0) {
             const h = this.hitHandle(mx, my, this.imageLayers[this.selectedIdx]);
             if (h === 'nw' || h === 'se') { this.canvas.style.cursor = 'nwse-resize'; return; }
@@ -1195,9 +1371,21 @@ class EasyNoteView extends ItemView {
             if (h === 'nw' || h === 'se') { this.canvas.style.cursor = 'nwse-resize'; return; }
             if (h === 'ne' || h === 'sw') { this.canvas.style.cursor = 'nesw-resize'; return; }
         }
+        // Markdown 層控點
+        if (this.selectedMdIdx >= 0 && this.selectedMdIdx < this.markdownLayers.length) {
+            const h = this.hitMdHandle(mx, my, this.markdownLayers[this.selectedMdIdx]);
+            if (h === 'nw' || h === 'se') { this.canvas.style.cursor = 'nwse-resize'; return; }
+            if (h === 'ne' || h === 'sw') { this.canvas.style.cursor = 'nesw-resize'; return; }
+        }
         // 文字層
         for (let i = this.textLayers.length - 1; i >= 0; i--) {
             if (this.pointInText(mx, my, this.textLayers[i])) {
+                this.canvas.style.cursor = 'move'; return;
+            }
+        }
+        // Markdown 層
+        for (let i = this.markdownLayers.length - 1; i >= 0; i--) {
+            if (this.pointInMd(mx, my, this.markdownLayers[i])) {
                 this.canvas.style.cursor = 'move'; return;
             }
         }
@@ -1261,9 +1449,12 @@ class EasyNoteView extends ItemView {
         this.pushHistory();                 // 清除前先存快照
         this.paintCtx.clearRect(0, 0, this.paintCanvas.width, this.paintCanvas.height);
         this.imageLayers     = [];
+        this.markdownLayers  = [];
         this.textLayers      = [];
         this.selectedIdx     = -1;
+        this.selectedMdIdx   = -1;
         this.selectedTextIdx = -1;
+        this.mdDragState     = null;
         this.paintFragment   = null;
         this.paintFragDrag   = null;
         this.selStart        = null;
@@ -1329,6 +1520,11 @@ class EasyNoteView extends ItemView {
             const fontSize = state.layerIdx >= 0 ? this.textLayers[state.layerIdx].fontSize : this.textFontSize;
             const color    = state.layerIdx >= 0 ? this.textLayers[state.layerIdx].color    : this.colors[this.colorIdx];
             if (state.layerIdx >= 0) {
+                // 手動編輯 → 解除筆記連結
+                if (this.textLayers[state.layerIdx].linkedNotePath) {
+                    this.textLayers[state.layerIdx].linkedNotePath = undefined;
+                    new Notice('已解除筆記連結（文字已手動編輯）');
+                }
                 this.textLayers[state.layerIdx].text = text;
             } else {
                 this.textLayers.push({ text, x: state.x, y: state.y, fontSize, color });
@@ -1338,6 +1534,76 @@ class EasyNoteView extends ItemView {
             this.textLayers.splice(state.layerIdx, 1);
             if (this.selectedTextIdx >= state.layerIdx) {
                 this.selectedTextIdx = Math.max(-1, this.selectedTextIdx - 1);
+            }
+        }
+        this.render();
+    }
+
+    // ── Markdown 圖層編輯器 ────────────────────────────────────────────────────
+
+    private openMarkdownEditor(layerIdx: number): void {
+        if (this._mdEditing)   this.commitMarkdownEdit(this._mdEditing);
+        if (this._textEditing) this.commitTextEdit(this._textEditing);
+
+        const ml          = this.markdownLayers[layerIdx];
+        const canvasRect  = this.canvas.getBoundingClientRect();
+        const screenX     = canvasRect.left + ml.x * this.zoom;
+        const screenY     = canvasRect.top  + ml.y * this.zoom;
+
+        const ta             = document.createElement('textarea');
+        ta.className         = 'easynote-text-editor easynote-md-editor';
+        ta.style.left        = `${screenX}px`;
+        ta.style.top         = `${screenY}px`;
+        ta.style.fontSize    = `${ml.fontSize * this.zoom}px`;
+        ta.style.width       = `${ml.width * this.zoom}px`;
+        if (ml._cachedH) ta.style.height = `${ml._cachedH * this.zoom}px`;
+        ta.value             = ml.text;
+
+        document.body.appendChild(ta);
+        setTimeout(() => { ta.focus(); ta.select(); }, 10);
+
+        const state = { el: ta, layerIdx };
+        this._mdEditing = state;
+
+        ta.addEventListener('blur', () => {
+            if (this._mdEditing === state) this.commitMarkdownEdit(state);
+        });
+        ta.addEventListener('keydown', (e: KeyboardEvent) => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                if (this._mdEditing === state) {
+                    this._mdEditing = null;
+                    ta.remove();
+                }
+            }
+            e.stopPropagation();
+        });
+    }
+
+    private commitMarkdownEdit(state: { el: HTMLTextAreaElement; layerIdx: number }): void {
+        this._mdEditing = null;
+        const text = state.el.value;
+        state.el.remove();
+        this.pushHistory();
+
+        if (text.trim()) {
+            const ml = this.markdownLayers[state.layerIdx];
+            ml.text     = text;
+            ml._cachedH = undefined;
+            // 如果有連結路徑，寫回 Vault 檔案（EasyNote → Vault 雙向同步）
+            if (ml.linkedNotePath) {
+                const f = this.app.vault.getAbstractFileByPath(ml.linkedNotePath);
+                if (f instanceof TFile) {
+                    this._suppressVaultModify = true;
+                    this.app.vault.modify(f, text).finally(() => {
+                        this._suppressVaultModify = false;
+                    });
+                }
+            }
+        } else {
+            this.markdownLayers.splice(state.layerIdx, 1);
+            if (this.selectedMdIdx >= state.layerIdx) {
+                this.selectedMdIdx = Math.max(-1, this.selectedMdIdx - 1);
             }
         }
         this.render();
@@ -1444,8 +1710,9 @@ class EasyNoteView extends ItemView {
             : '暫存: 等待中';
         if (this.tool === 'select') {
             const ni = this.imageLayers.length;
+            const nm = this.markdownLayers.length;
             const nt = this.textLayers.length;
-            this.statusLabel.textContent = `選取模式 | 圖片: ${ni} 張 | 文字: ${nt} 個 | ${zoomStr} | ${saveStr}`;
+            this.statusLabel.textContent = `選取模式 | 圖片: ${ni} 張 | MD: ${nm} 個 | 文字: ${nt} 個 | ${zoomStr} | ${saveStr}`;
         } else if (this.tool === 'text') {
             this.statusLabel.textContent = `工具: 文字 | 字體: ${this.textFontSize}px | ${zoomStr} | ${saveStr}`;
         } else if (this.tool === 'paintselect') {
@@ -1529,6 +1796,12 @@ class EasyNoteView extends ItemView {
                         this.selectedIdx = -1;
                         this.render();
                         this.refreshStatus();
+                    } else if (this.selectedMdIdx >= 0) {
+                        this.pushHistory();
+                        this.markdownLayers.splice(this.selectedMdIdx, 1);
+                        this.selectedMdIdx = -1;
+                        this.render();
+                        this.refreshStatus();
                     } else if (this.selectedTextIdx >= 0) {
                         this.pushHistory();
                         this.textLayers.splice(this.selectedTextIdx, 1);
@@ -1589,11 +1862,15 @@ class EasyNoteView extends ItemView {
         // 截斷 redo 分支
         this.history.splice(this.historyIdx + 1);
         const entry: HistoryEntry = {
-            paintData:   this.paintCtx.getImageData(0, 0, this.paintCanvas.width, this.paintCanvas.height),
-            imageLayers: this.imageLayers.map(l => ({ img: l.img, x: l.x, y: l.y, w: l.w, h: l.h })),
-            textLayers:  this.textLayers.map(tl => ({ ...tl })),
-            canvasW:     this.canvas.width,
-            canvasH:     this.canvas.height,
+            paintData:      this.paintCtx.getImageData(0, 0, this.paintCanvas.width, this.paintCanvas.height),
+            imageLayers:    this.imageLayers.map(l => ({ img: l.img, x: l.x, y: l.y, w: l.w, h: l.h })),
+            markdownLayers: this.markdownLayers.map(ml => ({
+                text: ml.text, x: ml.x, y: ml.y, fontSize: ml.fontSize,
+                color: ml.color, width: ml.width, linkedNotePath: ml.linkedNotePath,
+            })),
+            textLayers:     this.textLayers.map(tl => ({ ...tl })),
+            canvasW:        this.canvas.width,
+            canvasH:        this.canvas.height,
         };
         this.history.push(entry);
         if (this.history.length > EasyNoteView.MAX_HISTORY) {
@@ -1616,9 +1893,12 @@ class EasyNoteView extends ItemView {
         this.paintCtx.clearRect(0, 0, this.paintCanvas.width, this.paintCanvas.height);
         this.paintCtx.putImageData(entry.paintData, 0, 0);
         this.imageLayers     = entry.imageLayers.map(l => ({ ...l }));
+        this.markdownLayers  = entry.markdownLayers.map(ml => ({ ...ml }));
         this.textLayers      = entry.textLayers.map(tl => ({ ...tl }));
         this.selectedIdx     = -1;
+        this.selectedMdIdx   = -1;
         this.selectedTextIdx = -1;
+        this.mdDragState     = null;
         this.paintFragment   = null;
         this.paintFragDrag   = null;
         this.render();
@@ -1643,6 +1923,10 @@ class EasyNoteView extends ItemView {
                 const l = this.imageLayers[this.selectedIdx];
                 this.clipboard = { type: 'image', img: l.img, w: l.w, h: l.h };
                 new Notice('已複製圖片圖層');
+            } else if (this.selectedMdIdx >= 0 && this.selectedMdIdx < this.markdownLayers.length) {
+                const ml = this.markdownLayers[this.selectedMdIdx];
+                this.clipboard = { type: 'markdown', layer: { ...ml, _cachedH: undefined } };
+                new Notice('已複製 Markdown 圖層');
             } else if (this.selectedTextIdx >= 0 && this.selectedTextIdx < this.textLayers.length) {
                 this.clipboard = { type: 'text', layer: { ...this.textLayers[this.selectedTextIdx] } };
                 new Notice('已複製文字圖層');
@@ -1681,6 +1965,15 @@ class EasyNoteView extends ItemView {
                 this.render();
                 this.refreshStatus();
                 new Notice('已剪下圖片圖層');
+            } else if (this.selectedMdIdx >= 0 && this.selectedMdIdx < this.markdownLayers.length) {
+                const ml = this.markdownLayers[this.selectedMdIdx];
+                this.clipboard = { type: 'markdown', layer: { ...ml, _cachedH: undefined } };
+                this.pushHistory();
+                this.markdownLayers.splice(this.selectedMdIdx, 1);
+                this.selectedMdIdx = -1;
+                this.render();
+                this.refreshStatus();
+                new Notice('已剪下 Markdown 圖層');
             } else if (this.selectedTextIdx >= 0 && this.selectedTextIdx < this.textLayers.length) {
                 this.clipboard = { type: 'text', layer: { ...this.textLayers[this.selectedTextIdx] } };
                 this.pushHistory();
@@ -1761,12 +2054,21 @@ class EasyNoteView extends ItemView {
             this.imageLayers.push({ img: c.img, x, y, w: c.w, h: c.h });
             this.selectedIdx     = this.imageLayers.length - 1;
             this.selectedTextIdx = -1;
+            this.selectedMdIdx   = -1;
+            this.setTool('select');
+        } else if (this.clipboard.type === 'markdown') {
+            const src = this.clipboard.layer;
+            this.markdownLayers.push({ ...src, x: src.x + OFFSET, y: src.y + OFFSET, _cachedH: undefined });
+            this.selectedMdIdx   = this.markdownLayers.length - 1;
+            this.selectedIdx     = -1;
+            this.selectedTextIdx = -1;
             this.setTool('select');
         } else {
             const src = this.clipboard.layer;
             this.textLayers.push({ ...src, x: src.x + OFFSET, y: src.y + OFFSET });
             this.selectedTextIdx = this.textLayers.length - 1;
             this.selectedIdx     = -1;
+            this.selectedMdIdx   = -1;
             this.setTool('select');
         }
         this.render();
@@ -1800,11 +2102,15 @@ class EasyNoteView extends ItemView {
                 return { src: tmp.toDataURL('image/png'), x: lay.x, y: lay.y, w: lay.w, h: lay.h };
             });
             const project: ENote = {
-                version:      1,
-                canvasWidth:  this.canvas.width,
-                canvasHeight: this.canvas.height,
+                version:        1,
+                canvasWidth:    this.canvas.width,
+                canvasHeight:   this.canvas.height,
                 paintLayer,
                 imageLayers,
+                markdownLayers: this.markdownLayers.map(ml => ({
+                    text: ml.text, x: ml.x, y: ml.y, fontSize: ml.fontSize,
+                    color: ml.color, width: ml.width, linkedNotePath: ml.linkedNotePath,
+                })),
                 textLayers: this.textLayers.map(tl => ({ ...tl })),
             };
 
@@ -1846,11 +2152,15 @@ class EasyNoteView extends ItemView {
             });
 
             const project: ENote = {
-                version:      1,
-                canvasWidth:  this.canvas.width,
-                canvasHeight: this.canvas.height,
+                version:        1,
+                canvasWidth:    this.canvas.width,
+                canvasHeight:   this.canvas.height,
                 paintLayer,
                 imageLayers,
+                markdownLayers: this.markdownLayers.map(ml => ({
+                    text: ml.text, x: ml.x, y: ml.y, fontSize: ml.fontSize,
+                    color: ml.color, width: ml.width, linkedNotePath: ml.linkedNotePath,
+                })),
                 textLayers: this.textLayers.map(tl => ({ ...tl })),
             };
 
@@ -1878,9 +2188,12 @@ class EasyNoteView extends ItemView {
 
             // 重置狀態
             this.imageLayers     = [];
+            this.markdownLayers  = [];
             this.textLayers      = [];
             this.selectedIdx     = -1;
+            this.selectedMdIdx   = -1;
             this.selectedTextIdx = -1;
+            this.mdDragState     = null;
             this.paintFragment   = null;
 
             // 設定畫布尺寸（直接寫，不復原舊內容）
@@ -1912,8 +2225,14 @@ class EasyNoteView extends ItemView {
                 });
             }
 
+            // 還原 Markdown 圖層
+            this.markdownLayers = (project.markdownLayers ?? []).map(ml => ({ ...ml }));
+
             // 還原文字層
             this.textLayers = project.textLayers.map(tl => ({ ...tl }));
+
+            // 重新從 Vault 讀取連結筆記的最新內容
+            await this.resolveLinkedLayers();
 
             this.setTool('draw');
             this.applyZoom();
@@ -1926,6 +2245,408 @@ class EasyNoteView extends ItemView {
         } catch (err) {
             new Notice(`✗ 載入專案失敗: ${err}`);
             console.error('[EasyNote] loadProject error:', err);
+        }
+    }
+
+    // ── 筆記連結 ──────────────────────────────────────────────────────────────
+
+    /** 讀取所有帶有 linkedNotePath 的文字圖層與 Markdown 圖層，從 Vault 更新內容 */
+    private async resolveLinkedLayers(): Promise<void> {
+        for (const tl of this.textLayers) {
+            if (!tl.linkedNotePath) continue;
+            const f = this.app.vault.getAbstractFileByPath(tl.linkedNotePath);
+            if (f instanceof TFile) {
+                tl.text = await this.app.vault.read(f);
+            } else {
+                tl.text = `[找不到筆記: ${tl.linkedNotePath}]`;
+            }
+        }
+        for (const ml of this.markdownLayers) {
+            if (!ml.linkedNotePath) continue;
+            const f = this.app.vault.getAbstractFileByPath(ml.linkedNotePath);
+            if (f instanceof TFile) {
+                ml.text = await this.app.vault.read(f);
+            } else {
+                ml.text = `[找不到筆記: ${ml.linkedNotePath}]`;
+            }
+        }
+    }
+
+    /** 在畫布左上角插入一個連結到指定 .md 檔的 Markdown 圖層 */
+    private async addLinkedMarkdownLayer(file: TFile): Promise<void> {
+        this.pushHistory();
+        const ml: MarkdownLayer = {
+            text:           '',
+            x:              20,
+            y:              20,
+            fontSize:       16,
+            color:          '#000000',
+            width:          Math.min(600, Math.max(200, this.canvas.width - 60)),
+            linkedNotePath: file.path,
+        };
+        ml.text = await this.app.vault.read(file);
+        this.markdownLayers.push(ml);
+        this.selectedMdIdx   = this.markdownLayers.length - 1;
+        this.selectedIdx     = -1;
+        this.selectedTextIdx = -1;
+        this.setTool('select');
+        this.render();
+        this.refreshStatus();
+        new Notice(`已連結 Markdown 筆記「${file.basename}」`);
+    }
+
+    // ── Markdown 行內解析 ──────────────────────────────────────────────────────
+
+    /** 將一段文字解析為行內格式片段（程式碼、粗體、斜體、連結…）*/
+    private parseInline(text: string): InlineSeg[] {
+        const result: InlineSeg[] = [];
+        let i = 0;
+        let buf = '';
+        const flush = () => { if (buf) { result.push({ text: buf }); buf = ''; } };
+
+        while (i < text.length) {
+            // inline code: `code`
+            if (text[i] === '`') {
+                flush(); i++;
+                let code = '';
+                while (i < text.length && text[i] !== '`') code += text[i++];
+                if (text[i] === '`') i++;
+                if (code) result.push({ text: code, code: true });
+                continue;
+            }
+            // wikilink: [[note]] or [[note|display]]
+            if (text[i] === '[' && text[i + 1] === '[') {
+                flush(); i += 2;
+                let inner = '';
+                while (i < text.length && !(text[i] === ']' && text[i + 1] === ']')) inner += text[i++];
+                if (text[i] === ']') i += 2;
+                const display = inner.includes('|') ? inner.split('|')[1] : inner;
+                if (display) result.push({ text: display, link: true });
+                continue;
+            }
+            // markdown link: [text](url)
+            if (text[i] === '[') {
+                const ct = text.indexOf(']', i);
+                if (ct !== -1 && text[ct + 1] === '(') {
+                    const cu = text.indexOf(')', ct + 2);
+                    if (cu !== -1) {
+                        flush();
+                        result.push({ text: text.slice(i + 1, ct), link: true });
+                        i = cu + 1; continue;
+                    }
+                }
+            }
+            // bold+italic: ***text***
+            if (text.startsWith('***', i)) {
+                flush(); i += 3;
+                let inner = '';
+                while (i < text.length && !text.startsWith('***', i)) inner += text[i++];
+                if (text.startsWith('***', i)) i += 3;
+                if (inner) result.push({ text: inner, bold: true, italic: true });
+                continue;
+            }
+            // bold: **text** or __text__
+            if (text.startsWith('**', i) || text.startsWith('__', i)) {
+                const marker = text.slice(i, i + 2);
+                flush(); i += 2;
+                let inner = '';
+                while (i < text.length && !text.startsWith(marker, i)) inner += text[i++];
+                if (text.startsWith(marker, i)) i += 2;
+                if (inner) result.push({ text: inner, bold: true });
+                continue;
+            }
+            // italic: *text* or _text_
+            if (text[i] === '*' || text[i] === '_') {
+                const marker = text[i];
+                flush(); i++;
+                let inner = '';
+                while (i < text.length && text[i] !== marker && text[i] !== '\n') inner += text[i++];
+                if (text[i] === marker) i++;
+                if (inner) result.push({ text: inner, italic: true });
+                continue;
+            }
+            // strikethrough: ~~text~~ (just render text)
+            if (text.startsWith('~~', i)) {
+                flush(); i += 2;
+                let inner = '';
+                while (i < text.length && !text.startsWith('~~', i)) inner += text[i++];
+                if (text.startsWith('~~', i)) i += 2;
+                if (inner) result.push({ text: inner });
+                continue;
+            }
+            buf += text[i++];
+        }
+        flush();
+        return result;
+    }
+
+    /**
+     * 將行內片段渲染到 ctx，在 maxW 寬度內自動換行。
+     * 回傳：下一行的起始 Y（即 y0 + 使用的行數 * LH）。
+     */
+    private drawInlineLine(
+        ctx: CanvasRenderingContext2D,
+        text: string,
+        x0: number, y0: number,
+        maxW: number,
+        fontSize: number,
+        color: string,
+    ): number {
+        const LH = fontSize * 1.4;
+        const segs = this.parseInline(text);
+
+        type Tok = { t: string; bold: boolean; italic: boolean; code: boolean; link: boolean };
+        const tokens: Tok[] = [];
+        for (const seg of segs) {
+            for (const p of seg.text.split(/(\s+)/)) {
+                if (p.length > 0) tokens.push({
+                    t: p, bold: !!seg.bold, italic: !!seg.italic,
+                    code: !!seg.code, link: !!seg.link,
+                });
+            }
+        }
+
+        let cx = x0, cy = y0, lineStart = true;
+        for (const tok of tokens) {
+            const isSpace = /^\s+$/.test(tok.t);
+            if (lineStart && isSpace) continue;
+            const font = tok.code
+                ? `${fontSize * 0.85}px monospace`
+                : `${tok.italic ? 'italic ' : ''}${tok.bold ? 'bold ' : ''}${fontSize}px sans-serif`;
+            ctx.font = font;
+            const tw = ctx.measureText(tok.t).width;
+
+            if (!lineStart && cx + tw > x0 + maxW) {
+                cy += LH; cx = x0; lineStart = true;
+                if (isSpace) continue;
+            }
+            if (!isSpace) {
+                ctx.save();
+                ctx.textBaseline = 'top';
+                if (tok.link) {
+                    ctx.fillStyle = '#6c9ac0';
+                } else if (tok.code) {
+                    ctx.fillStyle = 'rgba(120,120,120,0.18)';
+                    ctx.fillRect(cx, cy, tw, fontSize * 1.1);
+                    ctx.fillStyle = color;
+                } else {
+                    ctx.fillStyle = color;
+                }
+                ctx.fillText(tok.t, cx, cy);
+                ctx.restore();
+            }
+            cx += tw;
+            lineStart = false;
+        }
+        return cy + LH;
+    }
+
+    /**
+     * 渲染完整 Markdown 圖層到 ctx。
+     * 回傳：渲染出的總高度（px）。同時會更新 ml._cachedH。
+     */
+    private drawMarkdownContent(ctx: CanvasRenderingContext2D, ml: MarkdownLayer): number {
+        const base = ml.fontSize;
+        const LH   = base * 1.4;
+        const HSZ  = [base * 1.9, base * 1.5, base * 1.2];   // h1, h2, h3
+        const x0   = ml.x;
+        let y = ml.y;
+
+        // 連結筆記：在頂部顯示檔案名稱標籤（與 Markdown 內容顏色不同）
+        if (ml.linkedNotePath) {
+            const basename = ml.linkedNotePath.split('/').pop()?.replace(/\.md$/i, '') ?? ml.linkedNotePath;
+            ctx.save();
+            ctx.font         = `italic ${base * 0.82}px sans-serif`;
+            ctx.fillStyle    = '#22aa44';
+            ctx.textBaseline = 'top';
+            ctx.fillText(basename, x0, y);
+            ctx.restore();
+            y += base * 1.0;
+            ctx.save();
+            ctx.strokeStyle = 'rgba(34,170,68,0.45)';
+            ctx.lineWidth   = 1;
+            ctx.setLineDash([4, 3]);
+            ctx.beginPath();
+            ctx.moveTo(x0,            y);
+            ctx.lineTo(x0 + ml.width, y);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.restore();
+            y += base * 0.45;
+        }
+
+        const lines     = ml.text.split('\n');
+        let inFence     = false;
+        const fenceLines: string[] = [];
+
+        const flushFence = () => {
+            if (fenceLines.length === 0) return;
+            const blockH = fenceLines.length * LH * 0.85 + base * 0.4;
+            ctx.save();
+            ctx.fillStyle = 'rgba(100,100,100,0.1)';
+            ctx.fillRect(x0, y, ml.width, blockH);
+            ctx.font         = `${base * 0.85}px monospace`;
+            ctx.fillStyle    = ml.color;
+            ctx.textBaseline = 'top';
+            for (const cl of fenceLines) {
+                ctx.fillText(cl, x0 + 6, y + 2);
+                y += LH * 0.85;
+            }
+            ctx.restore();
+            y += base * 0.4;
+            fenceLines.length = 0;
+        };
+
+        for (const rawLine of lines) {
+            // code fence toggle
+            if (rawLine.trimStart().startsWith('```')) {
+                if (!inFence) { inFence = true; } else { inFence = false; flushFence(); }
+                continue;
+            }
+            if (inFence) { fenceLines.push(rawLine); continue; }
+
+            // blank line
+            if (rawLine.trim() === '') { y += LH * 0.5; continue; }
+
+            // HR: ---, ***, ___
+            if (/^[-*_]{3,}\s*$/.test(rawLine.trim())) {
+                ctx.save();
+                ctx.strokeStyle = 'rgba(128,128,128,0.45)';
+                ctx.lineWidth   = 1;
+                ctx.setLineDash([5, 4]);
+                ctx.beginPath();
+                ctx.moveTo(x0,              y + LH * 0.4);
+                ctx.lineTo(x0 + ml.width,   y + LH * 0.4);
+                ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.restore();
+                y += LH; continue;
+            }
+
+            // heading: #, ##, ###
+            const hm = rawLine.match(/^(#{1,3})\s+(.*)/);
+            if (hm) {
+                const lvl = Math.min(3, hm[1].length) - 1;
+                const hSz = HSZ[lvl];
+                const hLH = hSz * 1.35;
+                y += base * 0.2;
+                ctx.save();
+                ctx.font         = `bold ${hSz}px sans-serif`;
+                ctx.fillStyle    = ml.color;
+                ctx.textBaseline = 'top';
+                let hx = x0, hy = y;
+                const headWords = hm[2].split(' ');
+                for (let wi = 0; wi < headWords.length; wi++) {
+                    if (!headWords[wi]) continue;
+                    const ws = wi < headWords.length - 1 ? headWords[wi] + ' ' : headWords[wi];
+                    const ww = ctx.measureText(ws).width;
+                    if (hx > x0 && hx + ww > x0 + ml.width) { hy += hLH; hx = x0; }
+                    ctx.fillText(ws, hx, hy);
+                    hx += ww;
+                }
+                ctx.restore();
+                y = hy + hLH + base * 0.2; continue;
+            }
+
+            // blockquote: > text
+            const qm = rawLine.match(/^>\s?(.*)/);
+            if (qm) {
+                ctx.save();
+                ctx.fillStyle = 'rgba(80,160,80,0.75)';
+                ctx.fillRect(x0, y, 3, LH);
+                ctx.restore();
+                y = this.drawInlineLine(ctx, qm[1], x0 + 10, y, ml.width - 10, base, ml.color);
+                continue;
+            }
+
+            // bullet list: -, *, +
+            const bm = rawLine.match(/^(\s*)[-*+]\s+(.*)/);
+            if (bm) {
+                const ind = Math.floor(bm[1].length / 2) * (base * 1.2);
+                const ox  = x0 + ind + base * 1.2;
+                ctx.save();
+                ctx.font         = `${base}px sans-serif`;
+                ctx.fillStyle    = ml.color;
+                ctx.textBaseline = 'middle';
+                ctx.fillText('•', x0 + ind + 2, y + LH * 0.5);
+                ctx.restore();
+                y = this.drawInlineLine(ctx, bm[2], ox, y, ml.width - (ox - x0), base, ml.color);
+                continue;
+            }
+
+            // numbered list: 1. text
+            const nm = rawLine.match(/^(\s*)(\d+)\.\s+(.*)/);
+            if (nm) {
+                const ind    = Math.floor(nm[1].length / 2) * (base * 1.2);
+                const numStr = nm[2] + '.';
+                const ox     = x0 + ind + base * 1.5;
+                ctx.save();
+                ctx.font         = `${base}px sans-serif`;
+                ctx.fillStyle    = ml.color;
+                ctx.textBaseline = 'top';
+                ctx.fillText(numStr, x0 + ind, y);
+                ctx.restore();
+                y = this.drawInlineLine(ctx, nm[3], ox, y, ml.width - (ox - x0), base, ml.color);
+                continue;
+            }
+
+            // normal paragraph
+            y = this.drawInlineLine(ctx, rawLine, x0, y, ml.width, base, ml.color);
+        }
+
+        if (inFence) flushFence();
+        const h = y - ml.y;
+        ml._cachedH = h;
+        return h;
+    }
+
+    // ── Markdown 圖層工具方法 ────────────────────────────────────────────────
+
+    private mdBBox(ml: MarkdownLayer): { x: number; y: number; w: number; h: number } {
+        const h = ml._cachedH
+            ?? Math.max(ml.text.split('\n').length * ml.fontSize * 1.4 + ml.fontSize, ml.fontSize * 2);
+        return { x: ml.x, y: ml.y, w: ml.width, h };
+    }
+
+    private pointInMd(mx: number, my: number, ml: MarkdownLayer): boolean {
+        const b = this.mdBBox(ml);
+        return mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h;
+    }
+
+    private hitMdHandle(mx: number, my: number, ml: MarkdownLayer): HandleType | null {
+        const b  = this.mdBBox(ml);
+        const hs = HANDLE_SIZE;
+        const corners: [HandleType, number, number][] = [
+            ['nw', b.x,       b.y      ],
+            ['ne', b.x + b.w, b.y      ],
+            ['sw', b.x,       b.y + b.h],
+            ['se', b.x + b.w, b.y + b.h],
+        ];
+        for (const [type, cx, cy] of corners) {
+            if (mx >= cx - hs && mx <= cx + hs && my >= cy - hs && my <= cy + hs) return type;
+        }
+        return null;
+    }
+
+    private drawMdSelectionBox(ml: MarkdownLayer): void {
+        const b      = this.mdBBox(ml);
+        const linked = !!ml.linkedNotePath;
+        this.ctx.save();
+        this.ctx.strokeStyle = linked ? '#22aa44' : '#9966cc';
+        this.ctx.lineWidth   = 1.5;
+        this.ctx.setLineDash([5, 3]);
+        this.ctx.strokeRect(b.x - 2, b.y - 2, b.w + 4, b.h + 4);
+        this.ctx.restore();
+        const hs = HANDLE_SIZE / 2;
+        for (const [cx, cy] of [[b.x, b.y], [b.x + b.w, b.y], [b.x, b.y + b.h], [b.x + b.w, b.y + b.h]] as [number, number][]) {
+            this.ctx.save();
+            this.ctx.setLineDash([]);
+            this.ctx.fillStyle   = '#ffffff';
+            this.ctx.strokeStyle = linked ? '#22aa44' : '#9966cc';
+            this.ctx.lineWidth   = 1.5;
+            this.ctx.fillRect(cx - hs, cy - hs, HANDLE_SIZE, HANDLE_SIZE);
+            this.ctx.strokeRect(cx - hs, cy - hs, HANDLE_SIZE, HANDLE_SIZE);
+            this.ctx.restore();
         }
     }
 
@@ -2348,6 +3069,63 @@ class VaultImagePickerModal extends Modal {
     onClose(): void {
         this.contentEl.empty();
     }
+}
+
+// ─── Vault 筆記選擇 Modal ─────────────────────────────────────────────────────
+class VaultNotePickerModal extends Modal {
+    private onChoose:     (file: TFile) => void;
+    private searchInput!: HTMLInputElement;
+    private listEl!:      HTMLElement;
+
+    constructor(app: App, onChoose: (file: TFile) => void) {
+        super(app);
+        this.onChoose = onChoose;
+    }
+
+    onOpen(): void {
+        const { contentEl } = this;
+        contentEl.empty();
+        this.modalEl.addClass('easynote-project-picker-modal');
+        contentEl.createEl('h3', { text: '連結 .md 筆記為文字圖層' });
+        contentEl.createEl('p', {
+            cls:  'easynote-picker-hint',
+            text: '選擇筆記後，內容會以原始 Markdown 顯示。每次重新開啟 EasyNote 會自動重新讀取筆記最新內容。',
+        });
+
+        this.searchInput             = contentEl.createEl('input');
+        this.searchInput.type        = 'text';
+        this.searchInput.placeholder = '搜尋筆記名稱…';
+        this.searchInput.className   = 'easynote-picker-search';
+        this.searchInput.addEventListener('input', () => this.renderList());
+
+        this.listEl = contentEl.createEl('div', { cls: 'easynote-project-list' });
+        this.renderList();
+        setTimeout(() => this.searchInput.focus(), 50);
+    }
+
+    private getFiles(): TFile[] {
+        const query = this.searchInput?.value.toLowerCase() ?? '';
+        return this.app.vault.getMarkdownFiles()
+            .filter(f => !query || f.name.toLowerCase().includes(query) || f.path.toLowerCase().includes(query))
+            .sort((a, b) => b.stat.mtime - a.stat.mtime);
+    }
+
+    private renderList(): void {
+        this.listEl.empty();
+        const files = this.getFiles();
+        if (files.length === 0) {
+            this.listEl.createEl('div', { cls: 'easynote-picker-empty', text: '找不到 .md 筆記' });
+            return;
+        }
+        for (const file of files) {
+            const item = this.listEl.createEl('div', { cls: 'easynote-project-item' });
+            item.createEl('span', { cls: 'easynote-project-name', text: file.basename });
+            item.createEl('span', { cls: 'easynote-project-path', text: file.parent?.path ?? '/' });
+            item.addEventListener('click', () => { this.onChoose(file); this.close(); });
+        }
+    }
+
+    onClose(): void { this.contentEl.empty(); }
 }
 
 // ─── 主插件類別 ───────────────────────────────────────────────────────────────
