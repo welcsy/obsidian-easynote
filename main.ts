@@ -48,6 +48,8 @@ interface EasyNoteSettings {
     defaultColors:    string[];
     brushMode:        'steps' | 'continuous';
     startupMode:      'previous' | 'new';
+    defaultCanvasWidth:  number;
+    defaultCanvasHeight: number;
 }
 const DEFAULT_SETTINGS: EasyNoteSettings = {
     defaultColorIdx:  0,
@@ -56,6 +58,8 @@ const DEFAULT_SETTINGS: EasyNoteSettings = {
     defaultColors:    [...COLORS],
     brushMode:        'steps',
     startupMode:      'new',
+    defaultCanvasWidth:  1920,
+    defaultCanvasHeight: 1080,
 };
 
 // ─── .enote 專案格式 ──────────────────────────────────────────────────────────
@@ -292,6 +296,8 @@ class EasyNoteView extends ItemView {
         this.dragState          = null;
         this.textDragState      = null;
         this._textEditing       = null;
+        this.manualWidth        = this.settings.defaultCanvasWidth  ?? 1920;
+        this.manualHeight       = this.settings.defaultCanvasHeight ?? 1080;
 
         const root = this.containerEl.children[1] as HTMLElement;
         root.empty();
@@ -302,7 +308,7 @@ class EasyNoteView extends ItemView {
 
         this._onKeyDown = this.handleKeyDown.bind(this);
         this._onPaste   = this.handlePaste.bind(this);
-        this._onResize  = this.resizeCanvas.bind(this);
+        this._onResize  = () => this.resizeCanvas(true);
         document.addEventListener('keydown', this._onKeyDown);
         document.addEventListener('paste',   this._onPaste);
         window.addEventListener('resize',    this._onResize);
@@ -1133,8 +1139,14 @@ class EasyNoteView extends ItemView {
         this.applyZoom();
     }
 
-    private resizeCanvas(): void {
-        if (this.manualWidth > 0 && this.manualHeight > 0) return;
+    private resizeCanvas(fromWindowResize = false): void {
+        if (this.manualWidth > 0 && this.manualHeight > 0) {
+            // 視窗縮放事件不重設手動尺寸（避免清空畫布），只在初始化時套用
+            if (!fromWindowResize) {
+                this.applyCanvasSize(this.manualWidth, this.manualHeight);
+            }
+            return;
+        }
         const w = Math.max(1, this.canvasWrapper.clientWidth);
         const h = Math.max(1, this.canvasWrapper.clientHeight);
         this.applyCanvasSize(w, h);
@@ -3378,6 +3390,38 @@ class EasyNoteSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 });
             });
+
+        // 預設畫布大小
+        new Setting(containerEl)
+            .setName('預設畫布寬度（px）')
+            .setDesc('新畫布的初始寬度（像素），預設 1920')
+            .addText((text) =>
+                text
+                    .setPlaceholder('1920')
+                    .setValue(String(this.plugin.settings.defaultCanvasWidth ?? 1920))
+                    .onChange(async (value) => {
+                        const v = parseInt(value);
+                        if (v > 0) {
+                            this.plugin.settings.defaultCanvasWidth = v;
+                            await this.plugin.saveSettings();
+                        }
+                    })
+            );
+        new Setting(containerEl)
+            .setName('預設畫布高度（px）')
+            .setDesc('新畫布的初始高度（像素），預設 1080')
+            .addText((text) =>
+                text
+                    .setPlaceholder('1080')
+                    .setValue(String(this.plugin.settings.defaultCanvasHeight ?? 1080))
+                    .onChange(async (value) => {
+                        const v = parseInt(value);
+                        if (v > 0) {
+                            this.plugin.settings.defaultCanvasHeight = v;
+                            await this.plugin.saveSettings();
+                        }
+                    })
+            );
 
         // 儲存資料夾
         new Setting(containerEl)
