@@ -31,6 +31,25 @@ function brushSizeToStep(size: number): number {
     return best + 1;  // 1-based
 }
 
+// ─── Wikilink 解析 ────────────────────────────────────────────────────────────
+interface WikiSegment { text: string; isLink: boolean; noteName?: string; }
+
+/** 將一行文字拆成普通文字段 + [[wikilink]] 段 */
+function parseWikilinks(line: string): WikiSegment[] {
+    const segs: WikiSegment[] = [];
+    const regex = /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
+    let last = 0, m: RegExpExecArray | null;
+    while ((m = regex.exec(line)) !== null) {
+        if (m.index > last) segs.push({ text: line.slice(last, m.index), isLink: false });
+        const noteName = m[1].trim();
+        const display  = m[2]?.trim() ?? noteName;
+        segs.push({ text: display, isLink: true, noteName });
+        last = m.index + m[0].length;
+    }
+    if (last < line.length) segs.push({ text: line.slice(last), isLink: false });
+    return segs;
+}
+
 const COLORS: string[] = [
     '#0d0d0d',
     '#F13F5E',
@@ -127,11 +146,12 @@ interface PaintFragment {
 
 /** 行內 Markdown 片段（用於 MarkdownLayer 渲染） */
 interface InlineSeg {
-    text:    string;
-    bold?:   boolean;
-    italic?: boolean;
-    code?:   boolean;
-    link?:   boolean;
+    text:     string;
+    bold?:    boolean;
+    italic?:  boolean;
+    code?:    boolean;
+    link?:    boolean;
+    noteName?: string;   // set for [[wikilink]] segments
 }
 
 /** MarkdownLayer：以 Markdown 語法渲染的內容圖層 */
@@ -717,6 +737,12 @@ class EasyNoteView extends ItemView {
                     this.selCurrent = { x: mx, y: my };
                 }
             } else if (this.tool === 'select') {
+                // ── [[Wikilink]] 點擊 → 在 Obsidian 開啟筆記 ──────────────────
+                const wikilinkHit = this.getWikilinkAt(mx, my);
+                if (wikilinkHit) {
+                    this.app.workspace.openLinkText(wikilinkHit, '');
+                    return;
+                }
                 // 先檢查文字圖層（文字層在繪畫層下方）
                 let hitText = -1;
                 for (let i = this.textLayers.length - 1; i >= 0; i--) {
@@ -774,6 +800,12 @@ class EasyNoteView extends ItemView {
                     if (this.pointInMd(mx, my, this.markdownLayers[i])) { hitMd = i; break; }
                 }
                 if (hitMd >= 0) {
+                    // [[Wikilink]] 點擊 → 在 Obsidian 開啟筆記
+                    const mdWikilink = this.getMdWikilinkAt(mx, my);
+                    if (mdWikilink) {
+                        this.app.workspace.openLinkText(mdWikilink, '');
+                        return;
+                    }
                     this.selectedMdIdx   = hitMd;
                     this.selectedIdx     = -1;
                     this.selectedTextIdx = -1;
@@ -1189,12 +1221,30 @@ class EasyNoteView extends ItemView {
         for (const tl of this.textLayers) {
             this.ctx.save();
             this.ctx.font         = `${tl.fontSize}px sans-serif`;
-            this.ctx.fillStyle    = tl.color;
             this.ctx.textBaseline = 'top';
             const lines = tl.text.split('\n');
             const lineH = tl.fontSize * 1.3;
             for (let li = 0; li < lines.length; li++) {
-                this.ctx.fillText(lines[li], tl.x, tl.y + li * lineH);
+                let cx = tl.x;
+                const cy = tl.y + li * lineH;
+                for (const seg of parseWikilinks(lines[li])) {
+                    const w = this.ctx.measureText(seg.text).width;
+                    if (seg.isLink) {
+                        this.ctx.fillStyle = '#4a9eff';
+                        this.ctx.fillText(seg.text, cx, cy);
+                        // underline
+                        this.ctx.strokeStyle = '#4a9eff';
+                        this.ctx.lineWidth   = Math.max(1, tl.fontSize * 0.06);
+                        this.ctx.beginPath();
+                        this.ctx.moveTo(cx,     cy + tl.fontSize + 1);
+                        this.ctx.lineTo(cx + w, cy + tl.fontSize + 1);
+                        this.ctx.stroke();
+                    } else {
+                        this.ctx.fillStyle = tl.color;
+                        this.ctx.fillText(seg.text, cx, cy);
+                    }
+                    cx += w;
+                }
             }
             this.ctx.restore();
         }
@@ -1444,12 +1494,19 @@ class EasyNoteView extends ItemView {
         // 文字層
         for (let i = this.textLayers.length - 1; i >= 0; i--) {
             if (this.pointInText(mx, my, this.textLayers[i])) {
+                // 若游標在 [[wikilink]] 上，顯示 pointer
+                if (this.getWikilinkAt(mx, my)) {
+                    this.canvas.style.cursor = 'pointer'; return;
+                }
                 this.canvas.style.cursor = 'move'; return;
             }
         }
         // Markdown 層
         for (let i = this.markdownLayers.length - 1; i >= 0; i--) {
             if (this.pointInMd(mx, my, this.markdownLayers[i])) {
+                if (this.getMdWikilinkAt(mx, my)) {
+                    this.canvas.style.cursor = 'pointer'; return;
+                }
                 this.canvas.style.cursor = 'move'; return;
             }
         }
@@ -1461,7 +1518,139 @@ class EasyNoteView extends ItemView {
         this.canvas.style.cursor = 'default';
     }
 
-    // ── 繪圖核心 ──────────────────────────────────────────────────────────────
+    // ── Wikilink 點擊偵測 ──────────────────────────────────────────────────────
+    /** 回傳 (mx,my) 位置下的 [[wikilink]] noteName，無則 null */
+    private getWikilinkAt(mx: number, my: number): string | null {
+        this.ctx.save();
+        for (const tl of this.textLayers) {
+            this.ctx.font = `${tl.fontSize}px sans-serif`;
+            const lines = tl.text.split('\n');
+            const lineH = tl.fontSize * 1.3;
+            for (let li = 0; li < lines.length; li++) {
+                const cy = tl.y + li * lineH;
+                if (my < cy || my > cy + tl.fontSize * 1.3) continue;
+                let cx = tl.x;
+                for (const seg of parseWikilinks(lines[li])) {
+                    const w = this.ctx.measureText(seg.text).width;
+                    if (seg.isLink && mx >= cx && mx <= cx + w) {
+                        this.ctx.restore();
+                        return seg.noteName!;
+                    }
+                    cx += w;
+                }
+            }
+        }
+        this.ctx.restore();
+        return null;
+    }
+
+    /** 回傳 (mx,my) 位置下的 Markdown 圖層 [[wikilink]] noteName，無則 null */
+    private getMdWikilinkAt(mx: number, my: number): string | null {
+        const ctx = this.ctx;
+        ctx.save();
+        for (const ml of this.markdownLayers) {
+            if (!this.pointInMd(mx, my, ml)) continue;
+
+            const base = ml.fontSize;
+            const LH   = base * 1.4;
+            const HSZ  = [base * 1.9, base * 1.5, base * 1.2];
+            const x0   = ml.x;
+            let y = ml.y;
+
+            // Skip linked-note title header
+            if (ml.linkedNotePath) {
+                y += base * 1.0;   // title text line
+                y += base * 0.45;  // separator gap
+            }
+
+            const lines    = ml.text.split('\n');
+            let inFence    = false;
+            let fenceCount = 0;
+
+            for (const rawLine of lines) {
+                if (rawLine.trimStart().startsWith('```')) {
+                    if (!inFence) { inFence = true; fenceCount = 0; }
+                    else { inFence = false; y += fenceCount * LH * 0.85 + base * 0.4; }
+                    continue;
+                }
+                if (inFence) { fenceCount++; continue; }
+                if (rawLine.trim() === '') { y += LH * 0.5; continue; }
+                if (/^[-*_]{3,}\s*$/.test(rawLine.trim())) { y += LH; continue; }
+
+                // heading — simulate height, no wikilink hit-test inside headings
+                const hm = rawLine.match(/^(#{1,3})\s+(.*)/);
+                if (hm) {
+                    const lvl = Math.min(3, hm[1].length) - 1;
+                    const hSz = HSZ[lvl];
+                    const hLH = hSz * 1.35;
+                    y += base * 0.2;
+                    ctx.font = `bold ${hSz}px sans-serif`;
+                    let hx = x0, hy = y;
+                    for (const w of hm[2].split(' ')) {
+                        if (!w) continue;
+                        const ww = ctx.measureText(w + ' ').width;
+                        if (hx > x0 && hx + ww > x0 + ml.width) { hy += hLH; hx = x0; }
+                        hx += ww;
+                    }
+                    y = hy + hLH + base * 0.2;
+                    continue;
+                }
+
+                // blockquote / bullet / numbered list / paragraph → inline line
+                let text = rawLine, lineX = x0, lineMaxW = ml.width;
+                const qm = rawLine.match(/^>\s?(.*)/);
+                const bm = rawLine.match(/^(\s*)[-*+]\s+(.*)/);
+                const nm = rawLine.match(/^(\s*)(\d+)\.\s+(.*)/);
+                if (qm) {
+                    text = qm[1]; lineX = x0 + 10; lineMaxW = ml.width - 10;
+                } else if (bm) {
+                    const ind = Math.floor(bm[1].length / 2) * (base * 1.2);
+                    lineX = x0 + ind + base * 1.2; lineMaxW = ml.width - (lineX - x0); text = bm[2];
+                } else if (nm) {
+                    const ind = Math.floor(nm[1].length / 2) * (base * 1.2);
+                    lineX = x0 + ind + base * 1.5; lineMaxW = ml.width - (lineX - x0); text = nm[3];
+                }
+
+                // Simulate drawInlineLine word-wrap to find link token positions
+                const segs = this.parseInline(text);
+                type Tok = { t: string; bold: boolean; italic: boolean; code: boolean; link: boolean; noteName?: string };
+                const tokens: Tok[] = [];
+                for (const seg of segs) {
+                    for (const p of seg.text.split(/(\s+)/)) {
+                        if (p.length > 0) tokens.push({
+                            t: p, bold: !!seg.bold, italic: !!seg.italic,
+                            code: !!seg.code, link: !!seg.link, noteName: seg.noteName,
+                        });
+                    }
+                }
+                let cx = lineX, cy = y, lineStart = true;
+                for (const tok of tokens) {
+                    const isSpace = /^\s+$/.test(tok.t);
+                    if (lineStart && isSpace) continue;
+                    const font = tok.code
+                        ? `${base * 0.85}px monospace`
+                        : `${tok.italic ? 'italic ' : ''}${tok.bold ? 'bold ' : ''}${base}px sans-serif`;
+                    ctx.font = font;
+                    const tw = ctx.measureText(tok.t).width;
+                    if (!lineStart && cx + tw > lineX + lineMaxW) {
+                        cy += LH; cx = lineX; lineStart = true;
+                        if (isSpace) continue;
+                    }
+                    if (!isSpace && tok.link && tok.noteName) {
+                        if (mx >= cx && mx <= cx + tw && my >= cy && my <= cy + base) {
+                            ctx.restore();
+                            return tok.noteName;
+                        }
+                    }
+                    cx += tw;
+                    lineStart = false;
+                }
+                y = cy + LH;
+            }
+        }
+        ctx.restore();
+        return null;
+    }
 
     private activeColor(): string {
         return this.eraser ? '#000000' : this.colors[this.colorIdx];
@@ -2422,8 +2611,10 @@ class EasyNoteView extends ItemView {
                 let inner = '';
                 while (i < text.length && !(text[i] === ']' && text[i + 1] === ']')) inner += text[i++];
                 if (text[i] === ']') i += 2;
-                const display = inner.includes('|') ? inner.split('|')[1] : inner;
-                if (display) result.push({ text: display, link: true });
+                const parts    = inner.split('|');
+                const noteName = parts[0].trim();
+                const display  = parts.length > 1 ? parts[1].trim() : noteName;
+                if (display) result.push({ text: display, link: true, noteName });
                 continue;
             }
             // markdown link: [text](url)
@@ -2497,13 +2688,13 @@ class EasyNoteView extends ItemView {
         const LH = fontSize * 1.4;
         const segs = this.parseInline(text);
 
-        type Tok = { t: string; bold: boolean; italic: boolean; code: boolean; link: boolean };
+        type Tok = { t: string; bold: boolean; italic: boolean; code: boolean; link: boolean; noteName?: string };
         const tokens: Tok[] = [];
         for (const seg of segs) {
             for (const p of seg.text.split(/(\s+)/)) {
                 if (p.length > 0) tokens.push({
                     t: p, bold: !!seg.bold, italic: !!seg.italic,
-                    code: !!seg.code, link: !!seg.link,
+                    code: !!seg.code, link: !!seg.link, noteName: seg.noteName,
                 });
             }
         }
@@ -2527,14 +2718,22 @@ class EasyNoteView extends ItemView {
                 ctx.textBaseline = 'top';
                 if (tok.link) {
                     ctx.fillStyle = '#6c9ac0';
+                    ctx.fillText(tok.t, cx, cy);
+                    ctx.strokeStyle = '#6c9ac0';
+                    ctx.lineWidth   = 1;
+                    ctx.beginPath();
+                    ctx.moveTo(cx,      cy + fontSize + 1);
+                    ctx.lineTo(cx + tw, cy + fontSize + 1);
+                    ctx.stroke();
                 } else if (tok.code) {
                     ctx.fillStyle = 'rgba(120,120,120,0.18)';
                     ctx.fillRect(cx, cy, tw, fontSize * 1.1);
                     ctx.fillStyle = color;
+                    ctx.fillText(tok.t, cx, cy);
                 } else {
                     ctx.fillStyle = color;
+                    ctx.fillText(tok.t, cx, cy);
                 }
-                ctx.fillText(tok.t, cx, cy);
                 ctx.restore();
             }
             cx += tw;
