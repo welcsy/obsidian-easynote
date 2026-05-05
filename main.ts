@@ -2976,14 +2976,35 @@ class EasyNoteView extends ItemView {
             for (const tl of this.textLayers) {
                 tc.save();
                 tc.font         = `${tl.fontSize}px sans-serif`;
-                tc.fillStyle    = tl.color;
                 tc.textBaseline = 'top';
                 const lines = tl.text.split('\n');
                 const lineH = tl.fontSize * 1.3;
                 for (let li = 0; li < lines.length; li++) {
-                    tc.fillText(lines[li], tl.x, tl.y + li * lineH);
+                    let cx = tl.x;
+                    const cy = tl.y + li * lineH;
+                    for (const seg of parseWikilinks(lines[li])) {
+                        const w = tc.measureText(seg.text).width;
+                        if (seg.isLink) {
+                            tc.fillStyle   = '#4a9eff';
+                            tc.fillText(seg.text, cx, cy);
+                            tc.strokeStyle = '#4a9eff';
+                            tc.lineWidth   = Math.max(1, tl.fontSize * 0.06);
+                            tc.beginPath();
+                            tc.moveTo(cx,     cy + tl.fontSize + 1);
+                            tc.lineTo(cx + w, cy + tl.fontSize + 1);
+                            tc.stroke();
+                        } else {
+                            tc.fillStyle = tl.color;
+                            tc.fillText(seg.text, cx, cy);
+                        }
+                        cx += w;
+                    }
                 }
                 tc.restore();
+            }
+            // Markdown 層
+            for (const ml of this.markdownLayers) {
+                this.drawMarkdownContent(tc, ml);
             }
             // 繪畫層（上方）
             tc.drawImage(this.paintCanvas, 0, 0);
