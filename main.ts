@@ -236,6 +236,20 @@ class EasyNoteView extends ItemView {
     private selCurrent:       { x: number; y: number } | null = null;
     private paintSelectBtn!:  HTMLButtonElement;
 
+    // 圖層圈選（select mode rubber-band + multi-select）
+    private imgSelStart:   { x: number; y: number } | null = null;
+    private imgSelCurrent: { x: number; y: number } | null = null;
+    private multiSel: { imageIdxs: number[]; textIdxs: number[]; mdIdxs: number[] } | null = null;
+    private multiSelDrag: {
+        handle:     HandleType;
+        startMX:    number;
+        startMY:    number;
+        startBBox:  { x: number; y: number; w: number; h: number };
+        snapImages: { x: number; y: number; w: number; h: number }[];
+        snapTexts:  { x: number; y: number; fontSize: number }[];
+        snapMds:    { x: number; y: number; fontSize: number; width: number }[];
+    } | null = null;
+
     // 工具模式
     private tool:       'draw' | 'select' | 'text' | 'paintselect' = 'draw';
     private drawing     = false;
@@ -791,6 +805,35 @@ class EasyNoteView extends ItemView {
                     this.selCurrent = { x: mx, y: my };
                 }
             } else if (this.tool === 'select') {
+                // ── 多圖層選取（multi-select group）優先處理 ────────────────
+                if (this.multiSel) {
+                    const mh = this.hitMultiSelHandle(mx, my);
+                    if (mh) {
+                        this.pushHistory('縮放群組圖層');
+                        const bbox = this.getMultiSelBBox()!;
+                        this.multiSelDrag = {
+                            handle: mh, startMX: mx, startMY: my, startBBox: { ...bbox },
+                            snapImages: this.multiSel.imageIdxs.map(i => ({ ...this.imageLayers[i] })),
+                            snapTexts:  this.multiSel.textIdxs.map(i => ({ x: this.textLayers[i].x, y: this.textLayers[i].y, fontSize: this.textLayers[i].fontSize })),
+                            snapMds:    this.multiSel.mdIdxs.map(i => ({ x: this.markdownLayers[i].x, y: this.markdownLayers[i].y, fontSize: this.markdownLayers[i].fontSize, width: this.markdownLayers[i].width })),
+                        };
+                        return;
+                    }
+                    if (this.pointInMultiSelBBox(mx, my)) {
+                        this.pushHistory('移動群組圖層');
+                        const bbox = this.getMultiSelBBox()!;
+                        this.multiSelDrag = {
+                            handle: 'move', startMX: mx, startMY: my, startBBox: { ...bbox },
+                            snapImages: this.multiSel.imageIdxs.map(i => ({ ...this.imageLayers[i] })),
+                            snapTexts:  this.multiSel.textIdxs.map(i => ({ x: this.textLayers[i].x, y: this.textLayers[i].y, fontSize: this.textLayers[i].fontSize })),
+                            snapMds:    this.multiSel.mdIdxs.map(i => ({ x: this.markdownLayers[i].x, y: this.markdownLayers[i].y, fontSize: this.markdownLayers[i].fontSize, width: this.markdownLayers[i].width })),
+                        };
+                        return;
+                    }
+                    // 點擊群組外 → 解除群組選取，繼續後續判斷
+                    this.multiSel = null;
+                    this.multiSelDrag = null;
+                }
                 // ── [[Wikilink]] 點擊 → 在 Obsidian 開啟筆記 ──────────────────
                 const wikilinkHit = this.getWikilinkAt(mx, my);
                 if (wikilinkHit) {
@@ -893,14 +936,21 @@ class EasyNoteView extends ItemView {
                 for (let i = this.imageLayers.length - 1; i >= 0; i--) {
                     if (this.pointInLayer(mx, my, this.imageLayers[i])) { hit = i; break; }
                 }
-                this.selectedIdx     = hit;
-                this.selectedTextIdx = -1;
-                this.selectedMdIdx   = -1;
                 if (hit >= 0) {
+                    this.selectedIdx     = hit;
+                    this.selectedTextIdx = -1;
+                    this.selectedMdIdx   = -1;
                     const lay = this.imageLayers[hit];
                     this.pushHistory('移動圖片圖層');  // 移動圖片層前先存快照
                     this.dragState = { handle: 'move', startMX: mx, startMY: my,
                         startX: lay.x, startY: lay.y, startW: lay.w, startH: lay.h };
+                } else {
+                    // 空白處 → 開始圈選拖曳框
+                    this.selectedIdx     = -1;
+                    this.selectedTextIdx = -1;
+                    this.selectedMdIdx   = -1;
+                    this.imgSelStart   = { x: mx, y: my };
+                    this.imgSelCurrent = { x: mx, y: my };
                 }
                 this.render();
             } else {
@@ -924,6 +974,86 @@ class EasyNoteView extends ItemView {
             if (this.tool === 'select') {
                 // 更新游標
                 this.updateCursor(mx, my);
+
+                // 多圖層群組拖曳 / 縮放
+                if (this.multiSelDrag && this.multiSel) {
+                    const ds  = this.multiSelDrag;
+                    const dx  = mx - ds.startMX;
+                    const dy  = my - ds.startMY;
+                    if (ds.handle === 'move') {
+                        for (let k = 0; k < this.multiSel.imageIdxs.length; k++) {
+                            const i = this.multiSel.imageIdxs[k];
+                            this.imageLayers[i].x = ds.snapImages[k].x + dx;
+                            this.imageLayers[i].y = ds.snapImages[k].y + dy;
+                        }
+                        for (let k = 0; k < this.multiSel.textIdxs.length; k++) {
+                            const i = this.multiSel.textIdxs[k];
+                            this.textLayers[i].x = ds.snapTexts[k].x + dx;
+                            this.textLayers[i].y = ds.snapTexts[k].y + dy;
+                        }
+                        for (let k = 0; k < this.multiSel.mdIdxs.length; k++) {
+                            const i = this.multiSel.mdIdxs[k];
+                            this.markdownLayers[i].x = ds.snapMds[k].x + dx;
+                            this.markdownLayers[i].y = ds.snapMds[k].y + dy;
+                            this.markdownLayers[i]._cachedH = undefined;
+                        }
+                    } else {
+                        // 縮放：以對角為錨點，等比例縮放所有圖層
+                        const b = ds.startBBox;
+                        let anchorX: number, anchorY: number, newW: number, newH: number;
+                        if (ds.handle === 'nw') {
+                            anchorX = b.x + b.w; anchorY = b.y + b.h;
+                            newW = Math.max(10, anchorX - mx); newH = Math.max(10, anchorY - my);
+                        } else if (ds.handle === 'ne') {
+                            anchorX = b.x; anchorY = b.y + b.h;
+                            newW = Math.max(10, mx - anchorX); newH = Math.max(10, anchorY - my);
+                        } else if (ds.handle === 'sw') {
+                            anchorX = b.x + b.w; anchorY = b.y;
+                            newW = Math.max(10, anchorX - mx); newH = Math.max(10, my - anchorY);
+                        } else { // se
+                            anchorX = b.x; anchorY = b.y;
+                            newW = Math.max(10, mx - anchorX); newH = Math.max(10, my - anchorY);
+                        }
+                        if (e.shiftKey) {
+                            const sc = Math.min(newW / b.w, newH / b.h);
+                            newW = sc * b.w; newH = sc * b.h;
+                        }
+                        const sx = newW / b.w, sy = newH / b.h;
+                        for (let k = 0; k < this.multiSel.imageIdxs.length; k++) {
+                            const i  = this.multiSel.imageIdxs[k];
+                            const s  = ds.snapImages[k];
+                            this.imageLayers[i].x = anchorX + (s.x - anchorX) * sx;
+                            this.imageLayers[i].y = anchorY + (s.y - anchorY) * sy;
+                            this.imageLayers[i].w = Math.max(1, s.w * sx);
+                            this.imageLayers[i].h = Math.max(1, s.h * sy);
+                        }
+                        for (let k = 0; k < this.multiSel.textIdxs.length; k++) {
+                            const i = this.multiSel.textIdxs[k];
+                            const s = ds.snapTexts[k];
+                            this.textLayers[i].x = anchorX + (s.x - anchorX) * sx;
+                            this.textLayers[i].y = anchorY + (s.y - anchorY) * sy;
+                            this.textLayers[i].fontSize = Math.max(8, s.fontSize * (sx + sy) / 2);
+                        }
+                        for (let k = 0; k < this.multiSel.mdIdxs.length; k++) {
+                            const i = this.multiSel.mdIdxs[k];
+                            const s = ds.snapMds[k];
+                            this.markdownLayers[i].x = anchorX + (s.x - anchorX) * sx;
+                            this.markdownLayers[i].y = anchorY + (s.y - anchorY) * sy;
+                            this.markdownLayers[i].fontSize = Math.max(8, s.fontSize * sx);
+                            this.markdownLayers[i].width    = Math.max(40, s.width * sx);
+                            this.markdownLayers[i]._cachedH = undefined;
+                        }
+                    }
+                    this.render();
+                    return;
+                }
+
+                // 圈選橡皮筋框更新
+                if (this.imgSelStart) {
+                    this.imgSelCurrent = { x: mx, y: my };
+                    this.render();
+                    return;
+                }
 
                 // Markdown 拖曳 / 縮放
                 if (this.mdDragState && this.selectedMdIdx >= 0) {
@@ -1131,6 +1261,46 @@ class EasyNoteView extends ItemView {
                 this.paintFragDrag = null;
                 return;
             }
+            // 圖層圈選（rubber-band）結束 → 計算 multiSel
+            if (this.tool === 'select' && this.imgSelStart && this.imgSelCurrent) {
+                const x1 = Math.min(this.imgSelStart.x, this.imgSelCurrent.x);
+                const y1 = Math.min(this.imgSelStart.y, this.imgSelCurrent.y);
+                const x2 = Math.max(this.imgSelStart.x, this.imgSelCurrent.x);
+                const y2 = Math.max(this.imgSelStart.y, this.imgSelCurrent.y);
+                this.imgSelStart   = null;
+                this.imgSelCurrent = null;
+                if (x2 - x1 > 5 && y2 - y1 > 5) {
+                    const imageIdxs = this.imageLayers.reduce((acc, l, i) => {
+                        if (l.x + l.w > x1 && l.x < x2 && l.y + l.h > y1 && l.y < y2) acc.push(i);
+                        return acc;
+                    }, [] as number[]);
+                    const textIdxs = this.textLayers.reduce((acc, tl, i) => {
+                        const b = this.textBBox(tl);
+                        if (b.x + b.w > x1 && b.x < x2 && b.y + b.h > y1 && b.y < y2) acc.push(i);
+                        return acc;
+                    }, [] as number[]);
+                    const mdIdxs = this.markdownLayers.reduce((acc, ml, i) => {
+                        const b = this.mdBBox(ml);
+                        if (b.x + b.w > x1 && b.x < x2 && b.y + b.h > y1 && b.y < y2) acc.push(i);
+                        return acc;
+                    }, [] as number[]);
+                    const total = imageIdxs.length + textIdxs.length + mdIdxs.length;
+                    if (total > 1) {
+                        this.multiSel = { imageIdxs, textIdxs, mdIdxs };
+                        this.selectedIdx = -1; this.selectedTextIdx = -1; this.selectedMdIdx = -1;
+                    } else if (imageIdxs.length === 1) {
+                        this.selectedIdx = imageIdxs[0];
+                    } else if (textIdxs.length === 1) {
+                        this.selectedTextIdx = textIdxs[0];
+                    } else if (mdIdxs.length === 1) {
+                        this.selectedMdIdx = mdIdxs[0];
+                    }
+                }
+                this.multiSelDrag = null;
+                this.render();
+                return;
+            }
+            this.multiSelDrag  = null;
             this.drawing       = false;
             this.dragState     = null;
             this.textDragState = null;
@@ -1144,6 +1314,8 @@ class EasyNoteView extends ItemView {
             this.mdDragState   = null;
             this.paintFragDrag = null;
             if (this.selStart) { this.selStart = null; this.selCurrent = null; this.render(); }
+            this.multiSelDrag = null;
+            if (this.imgSelStart) { this.imgSelStart = null; this.imgSelCurrent = null; this.render(); }
         });
 
         // 雙擊選取模式下編輯文字 / Markdown
@@ -1320,6 +1492,25 @@ class EasyNoteView extends ItemView {
             }
             if (this.selectedTextIdx >= 0 && this.selectedTextIdx < this.textLayers.length) {
                 this.drawTextSelectionBox(this.textLayers[this.selectedTextIdx]);
+            }
+            // 圈選橡皮筋框
+            if (this.imgSelStart && this.imgSelCurrent) {
+                const x1 = Math.min(this.imgSelStart.x, this.imgSelCurrent.x);
+                const y1 = Math.min(this.imgSelStart.y, this.imgSelCurrent.y);
+                const x2 = Math.max(this.imgSelStart.x, this.imgSelCurrent.x);
+                const y2 = Math.max(this.imgSelStart.y, this.imgSelCurrent.y);
+                this.ctx.save();
+                this.ctx.strokeStyle = '#0088ff';
+                this.ctx.lineWidth   = 1.5;
+                this.ctx.setLineDash([5, 3]);
+                this.ctx.fillStyle   = 'rgba(0,136,255,0.06)';
+                this.ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+                this.ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+                this.ctx.restore();
+            }
+            // 多圖層選取框
+            if (this.multiSel) {
+                this.drawMultiSelBox();
             }
         }
         // 6. 繪畫選取工具的選框 / fragment 控點
@@ -1527,8 +1718,90 @@ class EasyNoteView extends ItemView {
         }
     }
 
+    // ── 多圖層選取 helpers ────────────────────────────────────────────────────
+
+    private getMultiSelBBox(): { x: number; y: number; w: number; h: number } | null {
+        if (!this.multiSel) return null;
+        const rects: { x: number; y: number; r: number; b: number }[] = [];
+        for (const i of this.multiSel.imageIdxs) {
+            const l = this.imageLayers[i];
+            rects.push({ x: l.x, y: l.y, r: l.x + l.w, b: l.y + l.h });
+        }
+        for (const i of this.multiSel.textIdxs) {
+            const bb = this.textBBox(this.textLayers[i]);
+            rects.push({ x: bb.x, y: bb.y, r: bb.x + bb.w, b: bb.y + bb.h });
+        }
+        for (const i of this.multiSel.mdIdxs) {
+            const bb = this.mdBBox(this.markdownLayers[i]);
+            rects.push({ x: bb.x, y: bb.y, r: bb.x + bb.w, b: bb.y + bb.h });
+        }
+        if (rects.length === 0) return null;
+        const x = Math.min(...rects.map(r => r.x));
+        const y = Math.min(...rects.map(r => r.y));
+        const rx = Math.max(...rects.map(r => r.r));
+        const by = Math.max(...rects.map(r => r.b));
+        return { x, y, w: rx - x, h: by - y };
+    }
+
+    private hitMultiSelHandle(mx: number, my: number): HandleType | null {
+        const bbox = this.getMultiSelBBox();
+        if (!bbox) return null;
+        const { x, y, w, h } = bbox;
+        const hs = HANDLE_SIZE;
+        const corners: [HandleType, number, number][] = [
+            ['nw', x,     y    ],
+            ['ne', x + w, y    ],
+            ['sw', x,     y + h],
+            ['se', x + w, y + h],
+        ];
+        for (const [type, cx, cy] of corners) {
+            if (mx >= cx - hs && mx <= cx + hs && my >= cy - hs && my <= cy + hs) return type;
+        }
+        return null;
+    }
+
+    private pointInMultiSelBBox(mx: number, my: number): boolean {
+        const bbox = this.getMultiSelBBox();
+        if (!bbox) return false;
+        return mx >= bbox.x && mx <= bbox.x + bbox.w && my >= bbox.y && my <= bbox.y + bbox.h;
+    }
+
+    private drawMultiSelBox(): void {
+        const bbox = this.getMultiSelBBox();
+        if (!bbox) return;
+        const { x, y, w, h } = bbox;
+        const pad = 6;
+        const bx = x - pad, by = y - pad, bw = w + pad * 2, bh = h + pad * 2;
+        this.ctx.save();
+        this.ctx.strokeStyle = '#aa33ff';
+        this.ctx.lineWidth   = 1.5;
+        this.ctx.setLineDash([6, 3]);
+        this.ctx.fillStyle   = 'rgba(170,51,255,0.04)';
+        this.ctx.fillRect(bx, by, bw, bh);
+        this.ctx.strokeRect(bx, by, bw, bh);
+        this.ctx.restore();
+        const hs = HANDLE_SIZE / 2;
+        for (const [cx, cy] of [[bx, by], [bx + bw, by], [bx, by + bh], [bx + bw, by + bh]] as [number, number][]) {
+            this.ctx.save();
+            this.ctx.setLineDash([]);
+            this.ctx.fillStyle   = '#ffffff';
+            this.ctx.strokeStyle = '#aa33ff';
+            this.ctx.lineWidth   = 1.5;
+            this.ctx.fillRect(cx - hs, cy - hs, HANDLE_SIZE, HANDLE_SIZE);
+            this.ctx.strokeRect(cx - hs, cy - hs, HANDLE_SIZE, HANDLE_SIZE);
+            this.ctx.restore();
+        }
+    }
+
     private updateCursor(mx: number, my: number): void {
-        if (this.dragState || this.textDragState || this.mdDragState) return;
+        if (this.dragState || this.textDragState || this.mdDragState || this.multiSelDrag) return;
+        // 多圖層群組控點
+        if (this.multiSel) {
+            const mh = this.hitMultiSelHandle(mx, my);
+            if (mh === 'nw' || mh === 'se') { this.canvas.style.cursor = 'nwse-resize'; return; }
+            if (mh === 'ne' || mh === 'sw') { this.canvas.style.cursor = 'nesw-resize'; return; }
+            if (this.pointInMultiSelBBox(mx, my)) { this.canvas.style.cursor = 'move'; return; }
+        }
         if (this.selectedIdx >= 0) {
             const h = this.hitHandle(mx, my, this.imageLayers[this.selectedIdx]);
             if (h === 'nw' || h === 'se') { this.canvas.style.cursor = 'nwse-resize'; return; }
@@ -1965,6 +2238,11 @@ class EasyNoteView extends ItemView {
         if (this.tool === 'paintselect' && t !== 'paintselect') {
             this.commitFragment();
         }
+        // 清除圈選狀態
+        this.multiSel      = null;
+        this.multiSelDrag  = null;
+        this.imgSelStart   = null;
+        this.imgSelCurrent = null;
         this.tool = t;
         this.paintSelectBtn.toggleClass('active', t === 'paintselect');
         if (t === 'draw') {
@@ -2113,7 +2391,13 @@ class EasyNoteView extends ItemView {
                 if (this.tool === 'paintselect') { this.commitFragment(); this.refreshStatus(); }
                 break;
             case 'Escape':
-                if (this.tool === 'paintselect') {
+                if (this.tool === 'select') {
+                    if (this.imgSelStart) {
+                        this.imgSelStart = null; this.imgSelCurrent = null; this.render();
+                    } else if (this.multiSel) {
+                        this.multiSel = null; this.multiSelDrag = null; this.render();
+                    }
+                } else if (this.tool === 'paintselect') {
                     if (this.selStart) {
                         this.selStart = null; this.selCurrent = null; this.render();
                     } else {
@@ -2129,7 +2413,15 @@ class EasyNoteView extends ItemView {
                 break;
             case 'Delete': case 'Backspace':
                 if (this.tool === 'select') {
-                    if (this.selectedIdx >= 0) {
+                    if (this.multiSel && (this.multiSel.imageIdxs.length + this.multiSel.textIdxs.length + this.multiSel.mdIdxs.length > 0)) {
+                        this.pushHistory('刪除群組圖層');
+                        for (const i of [...this.multiSel.imageIdxs].sort((a, b) => b - a)) this.imageLayers.splice(i, 1);
+                        for (const i of [...this.multiSel.textIdxs].sort((a, b) => b - a)) this.textLayers.splice(i, 1);
+                        for (const i of [...this.multiSel.mdIdxs].sort((a, b) => b - a)) this.markdownLayers.splice(i, 1);
+                        this.multiSel = null;
+                        this.selectedIdx = -1; this.selectedTextIdx = -1; this.selectedMdIdx = -1;
+                        this.render(); this.refreshStatus();
+                    } else if (this.selectedIdx >= 0) {
                         this.pushHistory('刪除圖片圖層');
                         this.imageLayers.splice(this.selectedIdx, 1);
                         this.selectedIdx = -1;
