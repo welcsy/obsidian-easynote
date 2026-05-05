@@ -417,9 +417,6 @@ class EasyNoteView extends ItemView {
         const row1 = bar.createEl('div',  { cls: 'easynote-toolbar-row' });
         const row2 = bar.createEl('div',  { cls: 'easynote-toolbar-row' });
 
-        row1.createEl('span', { cls: 'easynote-title', text: '✏ EasyNote' });
-        row1.createEl('div',  { cls: 'easynote-sep'  });
-
         // ── 插畫 群組 ────────────────────────────────────────────────────────
         row1.createEl('span', { cls: 'easynote-group-label', text: '插畫' });
 
@@ -556,7 +553,7 @@ class EasyNoteView extends ItemView {
             cls:   'easynote-btn easynote-btn-icon',
             title: '選取並移動/縮放圖片（快捷：S）\nDel 刪除選取圖片',
         });
-        setIcon(this.selectBtn, 'mouse-pointer-2');
+        setIcon(this.selectBtn, 'move');
         this.selectBtn.addEventListener('click', () => this.setTool('select'));
 
         // 載入本機圖片
@@ -597,11 +594,43 @@ class EasyNoteView extends ItemView {
             new VaultNotePickerModal(this.app, (file) => this.addLinkedMarkdownLayer(file)).open();
         });
 
-        // 目前圕層類型標示（右側）
+        // 目前圕層類型標示（右側，已隱藏）
         row1.createEl('div', { cls: 'easynote-spacer' });
         this.activeLayerLabel = row1.createEl('span', { cls: 'easynote-active-layer' });
+        this.activeLayerLabel.style.display = 'none';
 
         // ── 第二行 ──────────────────────────────────────────────────────────
+        // Undo / Redo 組合按鈕（左側）
+        const undoGroup = row2.createEl('div', { cls: 'easynote-history-group' });
+        this.undoBtn = undoGroup.createEl('button', {
+            cls:   'easynote-btn easynote-btn-icon',
+            title: '上一步 (Ctrl+Z)',
+        });
+        setIcon(this.undoBtn, 'undo-2');
+        this.undoBtn.addEventListener('click', () => { this.undo(); this.refreshUndoRedo(); });
+        const undoArrow = undoGroup.createEl('button', { cls: 'easynote-history-arrow', title: '選擇要回到哪一步' });
+        undoArrow.textContent = '▾';
+        undoArrow.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.showHistoryDropdown(undoArrow, 'undo');
+        });
+
+        const redoGroup = row2.createEl('div', { cls: 'easynote-history-group' });
+        this.redoBtn = redoGroup.createEl('button', {
+            cls:   'easynote-btn easynote-btn-icon',
+            title: '下一步 (Ctrl+Y)',
+        });
+        setIcon(this.redoBtn, 'redo-2');
+        this.redoBtn.addEventListener('click', () => { this.redo(); this.refreshUndoRedo(); });
+        const redoArrow = redoGroup.createEl('button', { cls: 'easynote-history-arrow', title: '選擇要唤復哪一步' });
+        redoArrow.textContent = '▾';
+        redoArrow.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.showHistoryDropdown(redoArrow, 'redo');
+        });
+
+        row2.createEl('div', { cls: 'easynote-sep' });
+
         // 筆刷滑桿
         row2.createEl('span', { cls: 'easynote-label', text: '筆刷:' });
         this.sizeSlider           = row2.createEl('input');
@@ -693,39 +722,6 @@ class EasyNoteView extends ItemView {
 
         row2.createEl('div', { cls: 'easynote-spacer' });
         this.statusLabel = row2.createEl('span', { cls: 'easynote-status' });
-
-        // ── 歸御小組 (row2 右側) ────────────────────────
-        row2.createEl('div', { cls: 'easynote-sep' });
-
-        // Undo 組合按鈕
-        const undoGroup       = row2.createEl('div', { cls: 'easynote-history-group' });
-        this.undoBtn          = undoGroup.createEl('button', {
-            cls:   'easynote-btn easynote-btn-icon',
-            title: '上一步 (Ctrl+Z)',
-        });
-        setIcon(this.undoBtn, 'undo-2');
-        this.undoBtn.addEventListener('click', () => { this.undo(); this.refreshUndoRedo(); });
-        const undoArrow = undoGroup.createEl('button', { cls: 'easynote-history-arrow', title: '選擇要回到哪一步' });
-        undoArrow.textContent = '▾';
-        undoArrow.addEventListener('click', (e) => {
-            e.stopPropagation();
-            this.showHistoryDropdown(undoArrow, 'undo');
-        });
-
-        // Redo 組合按鈕
-        const redoGroup       = row2.createEl('div', { cls: 'easynote-history-group' });
-        this.redoBtn          = redoGroup.createEl('button', {
-            cls:   'easynote-btn easynote-btn-icon',
-            title: '下一步 (Ctrl+Y)',
-        });
-        setIcon(this.redoBtn, 'redo-2');
-        this.redoBtn.addEventListener('click', () => { this.redo(); this.refreshUndoRedo(); });
-        const redoArrow = redoGroup.createEl('button', { cls: 'easynote-history-arrow', title: '選擇要唤復哪一步' });
-        redoArrow.textContent = '▾';
-        redoArrow.addEventListener('click', (e) => {
-            e.stopPropagation();
-            this.showHistoryDropdown(redoArrow, 'redo');
-        });
     }
 
     // ── Canvas 建構 ───────────────────────────────────────────────────────────
