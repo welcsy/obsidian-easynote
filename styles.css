@@ -140,6 +140,19 @@
 }
 
 /* 浮動文字編輯器（貼在 Canvas 上方）*/
+/* 工具列文字顏色選擇器 */
+.easynote-text-color-toolbar {
+    width:         26px;
+    height:        22px;
+    padding:       0 1px;
+    border:        1px solid var(--background-modifier-border);
+    border-radius: 3px;
+    background:    transparent;
+    cursor:        pointer;
+    flex-shrink:   0;
+    vertical-align: middle;
+}
+
 .easynote-text-editor {
     position:      fixed;
     z-index:       9999;

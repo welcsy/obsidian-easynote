@@ -253,7 +253,8 @@ class EasyNoteView extends ItemView {
     private eraserBtn!:       HTMLButtonElement;
     private selectBtn!:       HTMLButtonElement;
     private textBtn!:         HTMLButtonElement;
-    private fontSizeInput!:   HTMLInputElement;
+    private fontSizeInput!:    HTMLInputElement;
+    private textColorInput!:   HTMLInputElement;
     private sizeSlider!:       HTMLInputElement;
     private sizeValueLabel!:   HTMLSpanElement;
     private opacitySlider!:    HTMLInputElement;
@@ -527,6 +528,21 @@ class EasyNoteView extends ItemView {
             }
         });
 
+        // 文字顏色
+        row1.createEl('span', { cls: 'easynote-label', text: '顏色:' });
+        this.textColorInput          = row1.createEl('input');
+        this.textColorInput.type     = 'color';
+        this.textColorInput.value    = this.colors[0];
+        this.textColorInput.title    = '文字顏色';
+        this.textColorInput.className = 'easynote-text-color-toolbar';
+        this.textColorInput.addEventListener('input', () => {
+            // 即時更新已選中的文字圖層顏色
+            if (this.selectedTextIdx >= 0 && this.selectedTextIdx < this.textLayers.length) {
+                this.textLayers[this.selectedTextIdx].color = this.textColorInput.value;
+                this.render();
+            }
+        });
+
         row1.createEl('div', { cls: 'easynote-sep' });
 
         // ── 圖片 群組 ────────────────────────────────────────────────────────
@@ -776,6 +792,7 @@ class EasyNoteView extends ItemView {
                     this.dragState       = null;
                     this.mdDragState     = null;
                     const tl = this.textLayers[hitText];
+                    this.textColorInput.value = tl.color;
                     const b  = this.textBBox(tl);
                     this.pushHistory();  // 移動文字圖層前先存快照
                     this.textDragState = {
@@ -1737,7 +1754,11 @@ class EasyNoteView extends ItemView {
         const screenY    = canvasRect.top  + posY * this.zoom;
 
         const fontSize = layerIdx >= 0 ? this.textLayers[layerIdx].fontSize : this.textFontSize;
-        const color    = layerIdx >= 0 ? this.textLayers[layerIdx].color    : this.colors[this.colorIdx];
+
+        // 同步工具列顏色選擇器
+        if (layerIdx >= 0) {
+            this.textColorInput.value = this.textLayers[layerIdx].color;
+        }
 
         const ta             = document.createElement('textarea');
         ta.className         = 'easynote-text-editor';
@@ -1776,14 +1797,15 @@ class EasyNoteView extends ItemView {
 
         if (text.trim()) {
             const fontSize = state.layerIdx >= 0 ? this.textLayers[state.layerIdx].fontSize : this.textFontSize;
-            const color    = state.layerIdx >= 0 ? this.textLayers[state.layerIdx].color    : this.colors[this.colorIdx];
+            const color    = this.textColorInput.value;
             if (state.layerIdx >= 0) {
                 // 手動編輯 → 解除筆記連結
                 if (this.textLayers[state.layerIdx].linkedNotePath) {
                     this.textLayers[state.layerIdx].linkedNotePath = undefined;
                     new Notice('已解除筆記連結（文字已手動編輯）');
                 }
-                this.textLayers[state.layerIdx].text = text;
+                this.textLayers[state.layerIdx].text  = text;
+                this.textLayers[state.layerIdx].color = color;
             } else {
                 this.textLayers.push({ text, x: state.x, y: state.y, fontSize, color });
             }
