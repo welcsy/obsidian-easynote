@@ -447,7 +447,7 @@ class EasyNoteView extends ItemView {
             cls:   'easynote-btn easynote-btn-icon',
             title: '框選繪畫層區塊，可移動/縮放後再合併（快捷：M）\nEnter 確認　Esc 取消　Del 刪除選取區塊',
         });
-        setIcon(this.paintSelectBtn, 'lasso');
+        setIcon(this.paintSelectBtn, 'move');
         this.paintSelectBtn.addEventListener('click', () => this.setTool('paintselect'));
 
         row1.createEl('div', { cls: 'easynote-sep' });
