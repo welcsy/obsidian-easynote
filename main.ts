@@ -179,6 +179,7 @@ interface MdDragState {
 
 /** 畫布歷史快照（用於 Undo/Redo） */
 interface HistoryEntry {
+    label:          string;
     paintData:      ImageData;
     imageLayers:    { img: HTMLImageElement; x: number; y: number; w: number; h: number }[];
     markdownLayers: { text: string; x: number; y: number; fontSize: number; color: string; width: number; linkedNotePath?: string }[];
@@ -250,9 +251,9 @@ class EasyNoteView extends ItemView {
 
     // 工具列 DOM
     private statusLabel!:     HTMLSpanElement;
-    private eraserBtn!:       HTMLButtonElement;
-    private selectBtn!:       HTMLButtonElement;
-    private textBtn!:         HTMLButtonElement;
+    private eraserBtn!:        HTMLButtonElement;
+    private selectBtn!:        HTMLButtonElement;
+    private textBtn!:          HTMLButtonElement;
     private fontSizeInput!:    HTMLInputElement;
     private textColorInput!:   HTMLInputElement;
     private sizeSlider!:       HTMLInputElement;
@@ -262,6 +263,8 @@ class EasyNoteView extends ItemView {
     private colorBtns:    HTMLElement[] = [];
     private fileInput!:   HTMLInputElement;
     private activeLayerLabel!: HTMLSpanElement;
+    private undoBtn!:     HTMLButtonElement;
+    private redoBtn!:     HTMLButtonElement;
 
     // 縮放 & 平移（滾輪縮放，中鍵拖曳平移）
     private zoom          = 1.0;
@@ -376,7 +379,7 @@ class EasyNoteView extends ItemView {
             }
         } else {
             // 新畫布：推入空白起始狀態
-            this.pushHistory();
+            this.pushHistory('初始狀態');
         }
     }
 
@@ -690,6 +693,39 @@ class EasyNoteView extends ItemView {
 
         row2.createEl('div', { cls: 'easynote-spacer' });
         this.statusLabel = row2.createEl('span', { cls: 'easynote-status' });
+
+        // ── 歸御小組 (row2 右側) ────────────────────────
+        row2.createEl('div', { cls: 'easynote-sep' });
+
+        // Undo 組合按鈕
+        const undoGroup       = row2.createEl('div', { cls: 'easynote-history-group' });
+        this.undoBtn          = undoGroup.createEl('button', {
+            cls:   'easynote-btn easynote-btn-icon',
+            title: '上一步 (Ctrl+Z)',
+        });
+        setIcon(this.undoBtn, 'undo-2');
+        this.undoBtn.addEventListener('click', () => { this.undo(); this.refreshUndoRedo(); });
+        const undoArrow = undoGroup.createEl('button', { cls: 'easynote-history-arrow', title: '選擇要回到哪一步' });
+        undoArrow.textContent = '▾';
+        undoArrow.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.showHistoryDropdown(undoArrow, 'undo');
+        });
+
+        // Redo 組合按鈕
+        const redoGroup       = row2.createEl('div', { cls: 'easynote-history-group' });
+        this.redoBtn          = redoGroup.createEl('button', {
+            cls:   'easynote-btn easynote-btn-icon',
+            title: '下一步 (Ctrl+Y)',
+        });
+        setIcon(this.redoBtn, 'redo-2');
+        this.redoBtn.addEventListener('click', () => { this.redo(); this.refreshUndoRedo(); });
+        const redoArrow = redoGroup.createEl('button', { cls: 'easynote-history-arrow', title: '選擇要唤復哪一步' });
+        redoArrow.textContent = '▾';
+        redoArrow.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.showHistoryDropdown(redoArrow, 'redo');
+        });
     }
 
     // ── Canvas 建構 ───────────────────────────────────────────────────────────
@@ -776,7 +812,7 @@ class EasyNoteView extends ItemView {
                     if (h) {
                         const tl = this.textLayers[this.selectedTextIdx];
                         const b  = this.textBBox(tl);
-                        this.pushHistory();  // 拖曳彈物層前先存快照
+                        this.pushHistory('縮放文字圖層');  // 拖曳彈物層前先存快照
                         this.textDragState = {
                             handle: h, startMX: mx, startMY: my,
                             startX: tl.x, startY: tl.y,
@@ -794,7 +830,7 @@ class EasyNoteView extends ItemView {
                     const tl = this.textLayers[hitText];
                     this.textColorInput.value = tl.color;
                     const b  = this.textBBox(tl);
-                    this.pushHistory();  // 移動文字圖層前先存快照
+                    this.pushHistory('移動文字圖層');  // 移動文字圖層前先存快照
                     this.textDragState = {
                         handle: 'move', startMX: mx, startMY: my,
                         startX: tl.x, startY: tl.y,
@@ -809,7 +845,7 @@ class EasyNoteView extends ItemView {
                     if (h) {
                         const ml = this.markdownLayers[this.selectedMdIdx];
                         const b  = this.mdBBox(ml);
-                        this.pushHistory();
+                        this.pushHistory('縮放 Markdown 圖層');
                         this.mdDragState = {
                             handle: h, startMX: mx, startMY: my,
                             startX: ml.x, startY: ml.y,
@@ -836,7 +872,7 @@ class EasyNoteView extends ItemView {
                     this.textDragState   = null;
                     const ml = this.markdownLayers[hitMd];
                     const b  = this.mdBBox(ml);
-                    this.pushHistory();
+                    this.pushHistory('移動 Markdown 圖層');
                     this.mdDragState = {
                         handle: 'move', startMX: mx, startMY: my,
                         startX: ml.x, startY: ml.y,
@@ -850,7 +886,7 @@ class EasyNoteView extends ItemView {
                     const h = this.hitHandle(mx, my, this.imageLayers[this.selectedIdx]);
                     if (h) {
                         const lay = this.imageLayers[this.selectedIdx];
-                        this.pushHistory();  // 縮放圖片層前先存快照
+                        this.pushHistory('縮放圖片圖層');  // 縮放圖片層前先存快照
                         this.dragState = { handle: h, startMX: mx, startMY: my,
                             startX: lay.x, startY: lay.y, startW: lay.w, startH: lay.h };
                         return;
@@ -866,14 +902,14 @@ class EasyNoteView extends ItemView {
                 this.selectedMdIdx   = -1;
                 if (hit >= 0) {
                     const lay = this.imageLayers[hit];
-                    this.pushHistory();  // 移動圖片層前先存快照
+                    this.pushHistory('移動圖片圖層');  // 移動圖片層前先存快照
                     this.dragState = { handle: 'move', startMX: mx, startMY: my,
                         startX: lay.x, startY: lay.y, startW: lay.w, startH: lay.h };
                 }
                 this.render();
             } else {
                 // 畫筆 / 橡皮擦
-                this.pushHistory();  // 每次筆觸開始前保存快照
+                this.pushHistory(this.eraser ? '橡皮擦' : '筆觸');  // 每次筆觸開始前保存快照
                 this.drawing = true;
                 this.prevX = mx; this.prevY = my;
                 this.paintDot(mx, my);
@@ -1208,7 +1244,7 @@ class EasyNoteView extends ItemView {
     }
 
     setCanvasSize(w: number, h: number): void {
-        this.pushHistory();                 // 調整畫布前先存快照
+        this.pushHistory('調整畫布大小');                 // 調整畫布前先存快照
         this.manualWidth  = w;
         this.manualHeight = h;
         this.applyCanvasSize(w, h);
@@ -1439,7 +1475,7 @@ class EasyNoteView extends ItemView {
 
     private commitFragment(): void {
         if (!this.paintFragment) return;
-        this.pushHistory();                 // 合併繪畫區塊前先存快照
+        this.pushHistory('合併繪畫區塊');                 // 合併繪畫區塊前先存快照
         const f = this.paintFragment;
         this.paintCtx.drawImage(f.offscreen, 0, 0, f.offscreen.width, f.offscreen.height, f.x, f.y, f.w, f.h);
         this.paintFragment = null;
@@ -1722,7 +1758,7 @@ class EasyNoteView extends ItemView {
     }
 
     private clearCanvas(): void {
-        this.pushHistory();                 // 清除前先存快照
+        this.pushHistory('清除畫布');                 // 清除前先存快照
         this.paintCtx.clearRect(0, 0, this.paintCanvas.width, this.paintCanvas.height);
         this.imageLayers     = [];
         this.markdownLayers  = [];
@@ -1793,7 +1829,7 @@ class EasyNoteView extends ItemView {
         this._textEditing = null;
         const text = state.el.value;
         state.el.remove();
-        this.pushHistory();                 // 文字確認前先存快照
+        this.pushHistory('編輯文字');                 // 文字確認前先存快照
 
         if (text.trim()) {
             const fontSize = state.layerIdx >= 0 ? this.textLayers[state.layerIdx].fontSize : this.textFontSize;
@@ -1864,7 +1900,7 @@ class EasyNoteView extends ItemView {
         this._mdEditing = null;
         const text = state.el.value;
         state.el.remove();
-        this.pushHistory();
+        this.pushHistory('編輯 Markdown');
 
         if (text.trim()) {
             const ml = this.markdownLayers[state.layerIdx];
@@ -1916,7 +1952,7 @@ class EasyNoteView extends ItemView {
             const h = Math.round(img.naturalHeight * scale);
             const x = Math.round((cw - w) / 2);
             const y = Math.round((ch - h) / 2);
-            this.pushHistory();             // 圖片對入前先存快照
+            this.pushHistory('載入圖片');             // 圖片對入前先存快照
             this.imageLayers.push({ img, x, y, w, h });
             this.selectedIdx = this.imageLayers.length - 1;
             this.setTool('select');   // 載入後自動切到選取模式
@@ -2098,19 +2134,19 @@ class EasyNoteView extends ItemView {
             case 'Delete': case 'Backspace':
                 if (this.tool === 'select') {
                     if (this.selectedIdx >= 0) {
-                        this.pushHistory();
+                        this.pushHistory('刪除圖片圖層');
                         this.imageLayers.splice(this.selectedIdx, 1);
                         this.selectedIdx = -1;
                         this.render();
                         this.refreshStatus();
                     } else if (this.selectedMdIdx >= 0) {
-                        this.pushHistory();
+                        this.pushHistory('刪除 Markdown 圖層');
                         this.markdownLayers.splice(this.selectedMdIdx, 1);
                         this.selectedMdIdx = -1;
                         this.render();
                         this.refreshStatus();
                     } else if (this.selectedTextIdx >= 0) {
-                        this.pushHistory();
+                        this.pushHistory('刪除文字圖層');
                         this.textLayers.splice(this.selectedTextIdx, 1);
                         this.selectedTextIdx = -1;
                         this.render();
@@ -2118,7 +2154,7 @@ class EasyNoteView extends ItemView {
                     }
                 } else if (this.tool === 'paintselect' && this.paintFragment) {
                     // 棄用 fragment（不還原到畫布）
-                    this.pushHistory();
+                    this.pushHistory('刪除繪畫選取');
                     this.paintFragment = null;
                     this.paintFragDrag = null;
                     this.render();
@@ -2177,10 +2213,60 @@ class EasyNoteView extends ItemView {
     }
 
     // ── 歷史記錄（Undo / Redo）────────────────────────────────────────────────
-    private pushHistory(): void {
+    private refreshUndoRedo(): void {
+        if (!this.undoBtn || !this.redoBtn) return;
+        this.undoBtn.disabled = this.historyIdx <= 0;
+        this.redoBtn.disabled = this.historyIdx >= this.history.length - 1;
+    }
+
+    private showHistoryDropdown(anchor: HTMLElement, direction: 'undo' | 'redo'): void {
+        // 關閉已開启的 dropdown
+        document.querySelectorAll('.easynote-history-dropdown').forEach(el => el.remove());
+
+        // 建立可用步驟列表
+        const items: { label: string; idx: number }[] = [];
+        if (direction === 'undo') {
+            // 從目前位置往左（最近 → 最遠）
+            for (let i = this.historyIdx - 1; i >= 0; i--) {
+                items.push({ label: `↩ ${this.history[i + 1].label}`, idx: i });
+            }
+        } else {
+            // 從目前位置往右
+            for (let i = this.historyIdx + 1; i < this.history.length; i++) {
+                items.push({ label: `↪ ${this.history[i].label}`, idx: i });
+            }
+        }
+        if (items.length === 0) return;
+
+        const menu       = document.createElement('div');
+        menu.className   = 'easynote-history-dropdown';
+        const anchorRect = anchor.getBoundingClientRect();
+        menu.style.top   = `${anchorRect.bottom + window.scrollY + 2}px`;
+        menu.style.left  = `${anchorRect.left   + window.scrollX}px`;
+
+        for (const item of items) {
+            const row = menu.createEl('div', { cls: 'easynote-history-item', text: item.label });
+            row.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                menu.remove();
+                this.historyIdx = item.idx;
+                this.restoreHistory(this.history[item.idx]);
+                this.refreshUndoRedo();
+            });
+        }
+
+        document.body.appendChild(menu);
+        const close = (e: MouseEvent) => {
+            if (!menu.contains(e.target as Node)) { menu.remove(); document.removeEventListener('mousedown', close, true); }
+        };
+        requestAnimationFrame(() => document.addEventListener('mousedown', close, true));
+    }
+
+    private pushHistory(label = '操作'): void {
         // 截斷 redo 分支
         this.history.splice(this.historyIdx + 1);
         const entry: HistoryEntry = {
+            label,
             paintData:      this.paintCtx.getImageData(0, 0, this.paintCanvas.width, this.paintCanvas.height),
             imageLayers:    this.imageLayers.map(l => ({ img: l.img, x: l.x, y: l.y, w: l.w, h: l.h })),
             markdownLayers: this.markdownLayers.map(ml => ({
@@ -2197,6 +2283,7 @@ class EasyNoteView extends ItemView {
         } else {
             this.historyIdx = this.history.length - 1;
         }
+        this.refreshUndoRedo();
     }
 
     private restoreHistory(entry: HistoryEntry): void {
@@ -2227,12 +2314,14 @@ class EasyNoteView extends ItemView {
         if (this.historyIdx <= 0) return;
         this.historyIdx--;
         this.restoreHistory(this.history[this.historyIdx]);
+        this.refreshUndoRedo();
     }
 
     redo(): void {
         if (this.historyIdx >= this.history.length - 1) return;
         this.historyIdx++;
         this.restoreHistory(this.history[this.historyIdx]);
+        this.refreshUndoRedo();
     }
 
     // ── 複製 / 剪下 / 貼上（內部剪貼簿）─────────────────────────────────────
@@ -2278,7 +2367,7 @@ class EasyNoteView extends ItemView {
             if (this.selectedIdx >= 0 && this.selectedIdx < this.imageLayers.length) {
                 const l = this.imageLayers[this.selectedIdx];
                 this.clipboard = { type: 'image', img: l.img, w: l.w, h: l.h };
-                this.pushHistory();
+                this.pushHistory('剪下圖片圖層');
                 this.imageLayers.splice(this.selectedIdx, 1);
                 this.selectedIdx = -1;
                 this.render();
@@ -2287,7 +2376,7 @@ class EasyNoteView extends ItemView {
             } else if (this.selectedMdIdx >= 0 && this.selectedMdIdx < this.markdownLayers.length) {
                 const ml = this.markdownLayers[this.selectedMdIdx];
                 this.clipboard = { type: 'markdown', layer: { ...ml, _cachedH: undefined } };
-                this.pushHistory();
+                this.pushHistory('剪下 Markdown 圖層');
                 this.markdownLayers.splice(this.selectedMdIdx, 1);
                 this.selectedMdIdx = -1;
                 this.render();
@@ -2295,7 +2384,7 @@ class EasyNoteView extends ItemView {
                 new Notice('已剪下 Markdown 圖層');
             } else if (this.selectedTextIdx >= 0 && this.selectedTextIdx < this.textLayers.length) {
                 this.clipboard = { type: 'text', layer: { ...this.textLayers[this.selectedTextIdx] } };
-                this.pushHistory();
+                this.pushHistory('剪下文字圖層');
                 this.textLayers.splice(this.selectedTextIdx, 1);
                 this.selectedTextIdx = -1;
                 this.render();
@@ -2318,7 +2407,7 @@ class EasyNoteView extends ItemView {
             } else {
                 const r = this.getSelRect();
                 if (r) {
-                    this.pushHistory();
+                    this.pushHistory('剪下繪畫選取');
                     const copy = document.createElement('canvas');
                     copy.width  = r.w;
                     copy.height = r.h;
@@ -2349,7 +2438,7 @@ class EasyNoteView extends ItemView {
                 this.paintFragment = null;
                 this.paintFragDrag = null;
             }
-            this.pushHistory();
+            this.pushHistory('貼上繪畫');
             const c = this.clipboard;
             const px = Math.max(0, Math.floor((this.canvas.width  - c.w) / 2));
             const py = Math.max(0, Math.floor((this.canvas.height - c.h) / 2));
@@ -2364,7 +2453,7 @@ class EasyNoteView extends ItemView {
             new Notice('已貼上繪畫');
             return;
         }
-        this.pushHistory();
+        this.pushHistory('貼上');
         const OFFSET = 20;
         if (this.clipboard.type === 'image') {
             const c = this.clipboard;
@@ -2560,9 +2649,10 @@ class EasyNoteView extends ItemView {
             // 重置歷史記錄，載入狀態作為起點
             this.history    = [];
             this.historyIdx = -1;
-            this.pushHistory();
+            this.pushHistory('載入專案');
             this.lastProjectName = file.basename.replace(/\.enote$/i, '');
             new Notice('EasyNote：專案已載入');
+            this.refreshUndoRedo();
         } catch (err) {
             new Notice(`✗ 載入專案失敗: ${err}`);
             console.error('[EasyNote] loadProject error:', err);
@@ -2595,7 +2685,7 @@ class EasyNoteView extends ItemView {
 
     /** 在畫布左上角插入一個連結到指定 .md 檔的 Markdown 圖層 */
     private async addLinkedMarkdownLayer(file: TFile): Promise<void> {
-        this.pushHistory();
+        this.pushHistory('插入連結筆記');
         const ml: MarkdownLayer = {
             text:           '',
             x:              20,
