@@ -1,7 +1,7 @@
 {
   "id": "easynote",
   "name": "Easy Note",
-  "version": "1.0.29",
+  "version": "1.0.30",
   "minAppVersion": "1.0.0",
   "description": "在 Obsidian 側邊欄開啟全功能手繪畫布，支援多色畫筆、橡皮擦、文字圖層、Markdown 圖層、圖片圖層，並可匯出 PNG 到 Vault。畫布狀態以 .enote 格式儲存；若要在檔案總管中看到 .enote 檔，請至 Settings → Files & Links → Detect all file extensions 開啟「顯示所有副檔名」。",
   "author": "welcsy",

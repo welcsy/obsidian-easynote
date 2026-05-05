@@ -202,6 +202,10 @@ class EasyNoteView extends ItemView {
     private paintCanvas!: HTMLCanvasElement;
     private paintCtx!:    CanvasRenderingContext2D;
 
+    // 匯出
+    private lastSaveName    = '';
+    private lastProjectName = '';
+
     // 圖片圖層
     private imageLayers: ImageLayer[]  = [];
     private selectedIdx = -1;
@@ -642,7 +646,8 @@ class EasyNoteView extends ItemView {
         });
         saveProjectBtn.addEventListener('click', () => {
             const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-            new ProjectNameModal(this.app, `EasyNote-${ts}`, (name) => this.saveProject(name)).open();
+            const defaultName = this.lastProjectName || `EasyNote-${ts}`;
+            new ProjectNameModal(this.app, defaultName, (name) => this.saveProject(name)).open();
         });
 
         // 載入專案 (.enote)
@@ -663,7 +668,8 @@ class EasyNoteView extends ItemView {
         });
         saveBtn.addEventListener('click', () => {
             const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-            new SaveModal(this.app, `EasyNote-${ts}`, (name, fmt) => this.saveDrawing(name, fmt)).open();
+            const defaultName = this.lastSaveName || `EasyNote-${ts}`;
+            new SaveModal(this.app, defaultName, (name, fmt) => this.saveDrawing(name, fmt)).open();
         });
 
         row2.createEl('div', { cls: 'easynote-spacer' });
@@ -2465,6 +2471,7 @@ class EasyNoteView extends ItemView {
                 await this.app.vault.createBinary(filename, bytes.buffer as ArrayBuffer);
             }
             new Notice(`✓ 專案已儲存: ${filename}`);
+            this.lastProjectName = baseName;
         } catch (err) {
             new Notice(`✗ 儲存專案失敗: ${err}`);
             console.error('[EasyNote] saveProject error:', err);
@@ -2532,6 +2539,7 @@ class EasyNoteView extends ItemView {
             this.history    = [];
             this.historyIdx = -1;
             this.pushHistory();
+            this.lastProjectName = file.basename.replace(/\.enote$/i, '');
             new Notice('EasyNote：專案已載入');
         } catch (err) {
             new Notice(`✗ 載入專案失敗: ${err}`);
@@ -3022,6 +3030,7 @@ class EasyNoteView extends ItemView {
             for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
 
             await this.app.vault.createBinary(filename, bytes.buffer);
+            this.lastSaveName = baseName;
             new Notice(`✓ 已儲存: ${filename}`);
         } catch (err) {
             new Notice(`✗ 儲存失敗: ${err}`);
