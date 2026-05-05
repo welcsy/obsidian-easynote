@@ -151,6 +151,7 @@ interface InlineSeg {
     italic?:  boolean;
     code?:    boolean;
     link?:    boolean;
+    url?:     string;    // set for [text](url) markdown links
     noteName?: string;   // set for [[wikilink]] segments
 }
 
@@ -902,6 +903,12 @@ class EasyNoteView extends ItemView {
                     const mdWikilink = this.getMdWikilinkAt(mx, my);
                     if (mdWikilink) {
                         this.app.workspace.openLinkText(mdWikilink, '');
+                        return;
+                    }
+                    // [text](url) 超連結點擊 → 在瀏覽器開啟
+                    const mdUrl = this.getMdUrlAt(mx, my);
+                    if (mdUrl) {
+                        window.open(mdUrl, '_blank');
                         return;
                     }
                     this.selectedMdIdx   = hitMd;
@@ -1980,6 +1987,107 @@ class EasyNoteView extends ItemView {
         return null;
     }
 
+    /** 回傳 (mx,my) 位置下的 Markdown 圖層 [text](url) 連結 URL，無則 null */
+    private getMdUrlAt(mx: number, my: number): string | null {
+        const ctx = this.ctx;
+        ctx.save();
+        for (const ml of this.markdownLayers) {
+            if (!this.pointInMd(mx, my, ml)) continue;
+
+            const base = ml.fontSize;
+            const LH   = base * 1.4;
+            const HSZ  = [base * 1.9, base * 1.5, base * 1.2];
+            const x0   = ml.x;
+            let y = ml.y;
+
+            if (ml.linkedNotePath) { y += base * 1.0; y += base * 0.45; }
+
+            const lines    = ml.text.split('\n');
+            let inFence    = false;
+            let fenceCount = 0;
+
+            for (const rawLine of lines) {
+                if (rawLine.trimStart().startsWith('```')) {
+                    if (!inFence) { inFence = true; fenceCount = 0; }
+                    else { inFence = false; y += fenceCount * LH * 0.85 + base * 0.4; }
+                    continue;
+                }
+                if (inFence) { fenceCount++; continue; }
+                if (rawLine.trim() === '') { y += LH * 0.5; continue; }
+                if (/^[-*_]{3,}\s*$/.test(rawLine.trim())) { y += LH; continue; }
+
+                const hm = rawLine.match(/^(#{1,3})\s+(.*)/);
+                if (hm) {
+                    const lvl = Math.min(3, hm[1].length) - 1;
+                    const hSz = HSZ[lvl];
+                    const hLH = hSz * 1.35;
+                    y += base * 0.2;
+                    ctx.font = `bold ${hSz}px sans-serif`;
+                    let hx = x0, hy = y;
+                    for (const w of hm[2].split(' ')) {
+                        if (!w) continue;
+                        const ww = ctx.measureText(w + ' ').width;
+                        if (hx > x0 && hx + ww > x0 + ml.width) { hy += hLH; hx = x0; }
+                        hx += ww;
+                    }
+                    y = hy + hLH + base * 0.2;
+                    continue;
+                }
+
+                let text = rawLine, lineX = x0, lineMaxW = ml.width;
+                const qm = rawLine.match(/^>\s?(.*)/);
+                const bm = rawLine.match(/^(\s*)[-*+]\s+(.*)/);
+                const nm = rawLine.match(/^(\s*)(\d+)\.\s+(.*)/);
+                if (qm) {
+                    text = qm[1]; lineX = x0 + 10; lineMaxW = ml.width - 10;
+                } else if (bm) {
+                    const ind = Math.floor(bm[1].length / 2) * (base * 1.2);
+                    lineX = x0 + ind + base * 1.2; lineMaxW = ml.width - (lineX - x0); text = bm[2];
+                } else if (nm) {
+                    const ind = Math.floor(nm[1].length / 2) * (base * 1.2);
+                    lineX = x0 + ind + base * 1.5; lineMaxW = ml.width - (lineX - x0); text = nm[3];
+                }
+
+                const segs = this.parseInline(text);
+                type Tok = { t: string; bold: boolean; italic: boolean; code: boolean; link: boolean; url?: string };
+                const tokens: Tok[] = [];
+                for (const seg of segs) {
+                    for (const p of seg.text.split(/(\s+)/)) {
+                        if (p.length > 0) tokens.push({
+                            t: p, bold: !!seg.bold, italic: !!seg.italic,
+                            code: !!seg.code, link: !!seg.link, url: seg.url,
+                        });
+                    }
+                }
+                let cx = lineX, cy = y, lineStart = true;
+                for (const tok of tokens) {
+                    const isSpace = /^\s+$/.test(tok.t);
+                    if (lineStart && isSpace) continue;
+                    const font = tok.code
+                        ? `${base * 0.85}px monospace`
+                        : `${tok.italic ? 'italic ' : ''}${tok.bold ? 'bold ' : ''}${base}px sans-serif`;
+                    ctx.font = font;
+                    const tw = ctx.measureText(tok.t).width;
+                    if (!lineStart && cx + tw > lineX + lineMaxW) {
+                        cy += LH; cx = lineX; lineStart = true;
+                        if (isSpace) continue;
+                    }
+                    if (!isSpace && tok.link && tok.url) {
+                        if (mx >= cx && mx <= cx + tw && my >= cy && my <= cy + base) {
+                            ctx.restore();
+                            return tok.url;
+                        }
+                    }
+                    cx += tw;
+                    lineStart = false;
+                }
+                y = cy + LH;
+            }
+        }
+        ctx.restore();
+        return null;
+    }
+
     private activeColor(): string {
         return this.eraser ? '#000000' : this.colors[this.colorIdx];
     }
@@ -3032,7 +3140,8 @@ class EasyNoteView extends ItemView {
                     const cu = text.indexOf(')', ct + 2);
                     if (cu !== -1) {
                         flush();
-                        result.push({ text: text.slice(i + 1, ct), link: true });
+                        const urlStr = text.slice(ct + 2, cu);
+                        result.push({ text: text.slice(i + 1, ct), link: true, url: urlStr });
                         i = cu + 1; continue;
                     }
                 }
