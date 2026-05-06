@@ -281,13 +281,20 @@ class EasyNoteView extends ItemView {
     private undoBtn!:     HTMLButtonElement;
     private redoBtn!:     HTMLButtonElement;
 
-    // 縮放 & 平移（滾輪縮放，中鍵拖曳平移）
+    // 縮放 & 平移（滾輪縮放，中鍵 / 雙指拖曳平移）
     private zoom          = 1.0;
     private isPanning     = false;
     private panStartX     = 0;
     private panStartY     = 0;
     private panScrollLeft = 0;
     private panScrollTop  = 0;
+
+    // 觸控多指追蹤（Pointer Events）
+    private activePointers: Map<number, { x: number; y: number }> = new Map();
+    private pinchStartDist: number | null = null;
+    private pinchStartZoom: number | null = null;
+    private pinchCenterX:   number | null = null;
+    private pinchCenterY:   number | null = null;
 
     // 自動儲存
     private autoSaveTimer:   ReturnType<typeof setTimeout> | null = null;
@@ -756,8 +763,38 @@ class EasyNoteView extends ItemView {
         this.resizeCanvas();
 
         // ── 滑鼠事件 ──────────────────────────────────────────────────────────
-        this.canvas.addEventListener('mousedown', (e) => {
-            // 中鍵按下 → 開始平移
+        this.canvas.addEventListener('pointerdown', (e) => {
+            this.activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+            // 雙指觸控 → 切換到平移 / 縮放模式，不執行繪圖
+            if (this.activePointers.size === 2) {
+                // 中止任何進行中的繪圖 / 拖曳
+                this.drawing       = false;
+                this.dragState     = null;
+                this.textDragState = null;
+                this.mdDragState   = null;
+                this.paintFragDrag = null;
+                this.multiSelDrag  = null;
+                this.imgSelStart   = null;
+                this.imgSelCurrent = null;
+                // 記錄 pinch 起始距離與畫面中心
+                const ptrs = [...this.activePointers.values()];
+                const dx   = ptrs[1].x - ptrs[0].x;
+                const dy   = ptrs[1].y - ptrs[0].y;
+                this.pinchStartDist = Math.hypot(dx, dy);
+                this.pinchStartZoom = this.zoom;
+                this.pinchCenterX   = (ptrs[0].x + ptrs[1].x) / 2;
+                this.pinchCenterY   = (ptrs[0].y + ptrs[1].y) / 2;
+                // 以雙指中心開始平移
+                this.isPanning     = true;
+                this.panStartX     = this.pinchCenterX;
+                this.panStartY     = this.pinchCenterY;
+                this.panScrollLeft = this.canvasWrapper.scrollLeft;
+                this.panScrollTop  = this.canvasWrapper.scrollTop;
+                return;
+            }
+
+            // 中鍵 → 開始平移
             if (e.button === 1) {
                 e.preventDefault();
                 this.isPanning     = true;
@@ -769,6 +806,9 @@ class EasyNoteView extends ItemView {
                 return;
             }
             if (e.button !== 0) return;
+            if (!e.isPrimary) return;
+
+            this.canvas.setPointerCapture(e.pointerId);
             const { x: mx, y: my } = this.toCanvasCoords(e);
 
             if (this.tool === 'text') {
@@ -908,7 +948,9 @@ class EasyNoteView extends ItemView {
                     // [text](url) 超連結點擊 → 在瀏覽器開啟
                     const mdUrl = this.getMdUrlAt(mx, my);
                     if (mdUrl) {
-                        window.open(mdUrl, '_blank');
+                        (this.app as any).openUrl
+                            ? (this.app as any).openUrl(mdUrl)
+                            : window.open(mdUrl, '_blank');
                         return;
                     }
                     this.selectedMdIdx   = hitMd;
@@ -969,13 +1011,48 @@ class EasyNoteView extends ItemView {
             }
         });
 
-        this.canvas.addEventListener('mousemove', (e) => {
-            // 中鍵平移
+        this.canvas.addEventListener('pointermove', (e) => {
+            // 更新此 pointer 的位置
+            if (this.activePointers.has(e.pointerId)) {
+                this.activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+            }
+
+            // 雙指 pinch-to-zoom + 平移
+            if (this.activePointers.size === 2) {
+                const ptrs = [...this.activePointers.values()];
+                // 縮放
+                if (this.pinchStartDist && this.pinchStartZoom !== null) {
+                    const dx   = ptrs[1].x - ptrs[0].x;
+                    const dy   = ptrs[1].y - ptrs[0].y;
+                    const dist = Math.hypot(dx, dy);
+                    const MIN_ZOOM = 0.1, MAX_ZOOM = 8.0;
+                    const newZoom  = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM,
+                        this.pinchStartZoom * (dist / this.pinchStartDist)));
+                    const wRect = this.canvasWrapper.getBoundingClientRect();
+                    const cx    = (this.pinchCenterX! - wRect.left);
+                    const cy    = (this.pinchCenterY! - wRect.top);
+                    const ratio = newZoom / this.zoom;
+                    this.zoom = newZoom;
+                    this.applyZoom();
+                    this.canvasWrapper.scrollLeft = (this.canvasWrapper.scrollLeft + cx) * ratio - cx;
+                    this.canvasWrapper.scrollTop  = (this.canvasWrapper.scrollTop  + cy) * ratio - cy;
+                    this.refreshStatus();
+                }
+                // 雙指平移（以中心點位移）
+                const cx = (ptrs[0].x + ptrs[1].x) / 2;
+                const cy = (ptrs[0].y + ptrs[1].y) / 2;
+                this.canvasWrapper.scrollLeft = this.panScrollLeft - (cx - this.panStartX);
+                this.canvasWrapper.scrollTop  = this.panScrollTop  - (cy - this.panStartY);
+                return;
+            }
+
+            // 中鍵 / 單指平移
             if (this.isPanning) {
                 this.canvasWrapper.scrollLeft = this.panScrollLeft - (e.clientX - this.panStartX);
                 this.canvasWrapper.scrollTop  = this.panScrollTop  - (e.clientY - this.panStartY);
                 return;
             }
+            if (!e.isPrimary) return;
             const { x: mx, y: my } = this.toCanvasCoords(e);
 
             if (this.tool === 'select') {
@@ -1251,7 +1328,18 @@ class EasyNoteView extends ItemView {
 
         });
 
-        this.canvas.addEventListener('mouseup', (e) => {
+        this.canvas.addEventListener('pointerup', (e) => {
+            this.activePointers.delete(e.pointerId);
+            // 雙指結束 → 重設 pinch 狀態
+            if (this.activePointers.size < 2) {
+                this.pinchStartDist = null;
+                this.pinchStartZoom = null;
+                this.pinchCenterX   = null;
+                this.pinchCenterY   = null;
+            }
+            if (this.activePointers.size === 0) {
+                this.isPanning = false;
+            }
             if (e.button === 1) {
                 this.isPanning = false;
                 this.canvas.style.cursor = this.tool === 'draw' ? 'crosshair' : (this.tool === 'text' ? 'text' : (this.tool === 'paintselect' ? 'crosshair' : 'default'));
@@ -1313,7 +1401,16 @@ class EasyNoteView extends ItemView {
             this.textDragState = null;
             this.mdDragState   = null;
         });
-        this.canvas.addEventListener('mouseleave', () => {
+        this.canvas.addEventListener('pointercancel', (e) => {
+            this.activePointers.delete(e.pointerId);
+            if (this.activePointers.size === 0) {
+                this.isPanning     = false;
+                this.pinchStartDist = null;
+                this.pinchStartZoom = null;
+            }
+        });
+        this.canvas.addEventListener('pointerleave', (e) => {
+            if (e.pointerType !== 'mouse') return;  // 觸控滑出由 pointerup/cancel 處理
             this.isPanning     = false;
             this.drawing       = false;
             this.dragState     = null;
@@ -1432,8 +1529,12 @@ class EasyNoteView extends ItemView {
     }
 
     /** 將滑鼠 offsetX/offsetY (CSS px) 轉換為畫布邏輯座標 */
-    private toCanvasCoords(e: MouseEvent): { x: number; y: number } {
-        return { x: e.offsetX / this.zoom, y: e.offsetY / this.zoom };
+    private toCanvasCoords(e: MouseEvent | PointerEvent): { x: number; y: number } {
+        const rect = this.canvas.getBoundingClientRect();
+        return {
+            x: (e.clientX - rect.left) / this.zoom,
+            y: (e.clientY - rect.top)  / this.zoom,
+        };
     }
 
     // ── 合成渲染 ──────────────────────────────────────────────────────────────
