@@ -914,12 +914,15 @@ class EasyNoteView extends ItemView {
             }
 
             if (this.tool === 'text') {
+                // Android：阻止瀏覽器預設的觸控焦點行為，避免與手動 focus() 競爭
+                e.preventDefault();
                 // 文字工具：搜尋是否點到已有文字圖層
                 let hitTextIdx = -1;
                 for (let i = this.textLayers.length - 1; i >= 0; i--) {
                     if (this.pointInText(mx, my, this.textLayers[i])) { hitTextIdx = i; break; }
                 }
                 this.openTextEditor(mx, my, hitTextIdx);
+                return;
             } else if (this.tool === 'paintselect') {
                 if (this.paintFragment) {
                     // 有 fragment：檢查控點 / 內部變鑑 / 外部 confirm
@@ -2675,7 +2678,15 @@ class EasyNoteView extends ItemView {
         const state = { el: ta, layerIdx, x: posX, y: posY };
         this._textEditing = state;
 
+        // Android 軟鍵盤彈出時會縮放 viewport → 觸發假的 blur
+        // 600ms 內的 blur 視為 spurious（鍵盤動畫），立即 refocus
+        let blurGuardUntil = 0;
+        ta.addEventListener('focus', () => { blurGuardUntil = Date.now() + 600; });
         ta.addEventListener('blur', () => {
+            if (Date.now() < blurGuardUntil) {
+                requestAnimationFrame(() => { if (this._textEditing === state) ta.focus(); });
+                return;
+            }
             if (this._textEditing === state) this.commitTextEdit(state);
         });
         ta.addEventListener('keydown', (e: KeyboardEvent) => {
