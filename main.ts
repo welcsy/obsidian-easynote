@@ -3662,7 +3662,11 @@ class EasyNoteView extends ItemView {
             if (!(await this.app.vault.adapter.exists(folder))) {
                 await this.app.vault.createFolder(folder);
             }
-            const filepath = normalizePath(`${folder}/${EasyNoteView.AUTOSAVE_FILENAME}`);
+            // 若已有開啟/儲存過的畫布，直接回存同一個檔案；否則才用 autosave 暫存檔
+            const filename = this.lastProjectName
+                ? `${folder}/${this.lastProjectName}.enote`
+                : `${folder}/${EasyNoteView.AUTOSAVE_FILENAME}`;
+            const filepath = normalizePath(filename);
 
             const paintLayer  = this.paintCanvas.toDataURL('image/png');
             const imageLayers: ENoteImageLayer[] = this.imageLayers.map((lay) => {
