@@ -240,6 +240,12 @@
     border-color: var(--interactive-accent);
 }
 
+/* 定時重新載入啟用時（icon 變主題色） */
+.easynote-btn.easynote-btn-active svg {
+    color: var(--interactive-accent);
+    fill:  var(--interactive-accent);
+}
+
 /* disabled 狀態 */
 .easynote-btn:disabled {
     opacity: 0.35;

@@ -71,8 +71,8 @@ interface EasyNoteSettings {
     defaultCanvasHeight: number;
     paintScale:          number; // 1.0=全解析度 0.5=半解析度（效能模式）
     timezone:            string; // IANA 時區，例如 'Asia/Taipei'
-    autoSyncEnabled:     boolean; // 定時 auto-sync 開關
-    autoSyncPeriodMs:    number;  // 定時 auto-sync 間隔（毫秒）
+    autoSyncEnabled:     boolean; // 定時 auto-reload 開關
+    autoSyncPeriodMs:    number;  // 定時 auto-reload 間隔（毫秒）
 }
 const DEFAULT_SETTINGS: EasyNoteSettings = {
     defaultColorIdx:  0,
@@ -86,7 +86,7 @@ const DEFAULT_SETTINGS: EasyNoteSettings = {
     paintScale:          1.0,
     timezone:            'Asia/Taipei',
     autoSyncEnabled:     false,
-    autoSyncPeriodMs:    60000,
+    autoSyncPeriodMs:    5000,
 };
 
 // ─── .enote 專案格式 ──────────────────────────────────────────────────────────
@@ -841,7 +841,7 @@ class EasyNoteView extends ItemView {
         // 定時 auto-sync 開關按鈕
         this.autoSyncBtn = canvasActions.createEl('button', {
             cls:   'easynote-btn easynote-btn-icon',
-            title: '定時自動同步開關',
+            title: '定時自動重新載入開關',
         });
         setIcon(this.autoSyncBtn, 'clock');
         this.autoSyncBtn.addEventListener('click', () => {
@@ -3064,8 +3064,8 @@ class EasyNoteView extends ItemView {
         if (this.autoSyncBtn) {
             this.autoSyncBtn.toggleClass('easynote-btn-active', this.settings.autoSyncEnabled ?? false);
             this.autoSyncBtn.title = this.settings.autoSyncEnabled
-                ? `定時同步：開啟（每 ${Math.round((this.settings.autoSyncPeriodMs ?? 60000) / 1000)} 秒）`
-                : '定時同步：關閉';
+                ? `定時重新載入：開啟（每 ${(this.settings.autoSyncPeriodMs ?? 1000) / 1000} 秒）`
+                : '定時重新載入：關閉';
         }
 
         const zoomStr = `縮放: ${Math.round(this.zoom * 100)}%`;
@@ -3685,12 +3685,20 @@ class EasyNoteView extends ItemView {
 
     // ── 自動儲存 ──────────────────────────────────────────────────────────────
     /** 每次 render() 後呼叫；debounce 3 秒後寫出暫存檔 */
-    /** 啟動定時 auto-sync（setInterval，依設定週期） */
+    /** 啟動定時 auto-reload（setInterval，依設定週期載入畫布檔） */
     private startAutoSync(): void {
         this.stopAutoSync();
-        const ms = Math.max(5000, this.settings.autoSyncPeriodMs ?? 60000);
+        const ms = Math.max(1000, this.settings.autoSyncPeriodMs ?? 5000);
         this._autoSyncTimer = setInterval(() => {
-            this.autoSaveDirect();
+            // 沒有檔名則跳過
+            if (!this.lastProjectName) return;
+            const filepath = normalizePath(
+                `${this.settings.saveFolder}/${this.lastProjectName}.enote`
+            );
+            const file = this.app.vault.getAbstractFileByPath(filepath);
+            if (file instanceof TFile) {
+                this.loadProject(file);
+            }
         }, ms);
     }
 
@@ -5042,8 +5050,8 @@ class EasyNoteSettingTab extends PluginSettingTab {
 
         // 定時 auto-sync
         new Setting(containerEl)
-            .setName('定時自動同步')
-            .setDesc('開啟後，畫布會依照設定的間隔定時自動儲存（工具列按鈕也可即時切換）')
+            .setName('定時自動重新載入')
+            .setDesc('開啟後，畫布會依照設定的間隔定時自動重新載入目前畫布檔（工具列按鈕也可即時切換），沒有檔名時不作動')
             .addToggle((toggle) => {
                 toggle.setValue(this.plugin.settings.autoSyncEnabled ?? false);
                 toggle.onChange(async (value) => {
@@ -5053,15 +5061,15 @@ class EasyNoteSettingTab extends PluginSettingTab {
             });
 
         new Setting(containerEl)
-            .setName('自動同步間隔（秒）')
-            .setDesc('定時自動同步的間隔秒數，最短 5 秒，預設 60 秒')
+            .setName('自動重新載入間隔（秒）')
+            .setDesc('定時自動重新載入的間隔秒數，最短 1 秒')
             .addText((text) =>
                 text
-                    .setPlaceholder('60')
-                    .setValue(String(Math.round((this.plugin.settings.autoSyncPeriodMs ?? 60000) / 1000)))
+                    .setPlaceholder('5')
+                    .setValue(String((this.plugin.settings.autoSyncPeriodMs ?? 5000) / 1000))
                     .onChange(async (value) => {
-                        const sec = parseInt(value);
-                        if (sec >= 5) {
+                        const sec = parseFloat(value);
+                        if (sec >= 1) {
                             this.plugin.settings.autoSyncPeriodMs = sec * 1000;
                             await this.plugin.saveSettings();
                         }
