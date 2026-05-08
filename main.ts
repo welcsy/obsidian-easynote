@@ -252,6 +252,7 @@ class EasyNoteView extends ItemView {
     private selStart:         { x: number; y: number } | null = null;
     private selCurrent:       { x: number; y: number } | null = null;
     private paintSelectBtn!:  HTMLButtonElement;
+    private panLockBtn!:       HTMLButtonElement;
 
     // 圖層圈選（select mode rubber-band + multi-select）
     private imgSelStart:   { x: number; y: number } | null = null;
@@ -268,7 +269,7 @@ class EasyNoteView extends ItemView {
     } | null = null;
 
     // 工具模式
-    private tool:       'draw' | 'select' | 'text' | 'paintselect' = 'draw';
+    private tool:       'draw' | 'select' | 'text' | 'paintselect' | 'pan' = 'draw';
     private drawing     = false;
     private prevX       = 0;
     private prevY       = 0;
@@ -676,6 +677,14 @@ class EasyNoteView extends ItemView {
             new VaultNotePickerModal(this.app, (file) => this.addLinkedMarkdownLayer(file)).open();
         });
 
+        // 平移鎖定工具（安全瀏覽，不會誤觸任何圖層）
+        this.panLockBtn = imageGroup.createEl('button', {
+            cls:   'easynote-btn easynote-btn-icon',
+            title: '平移鎖定：拖曳與縮放畫布，不會誤觸任何圖層',
+        });
+        setIcon(this.panLockBtn, 'hand');
+        this.panLockBtn.addEventListener('click', () => this.setTool('pan'));
+
         // 目前圕層類型標示（右側，已隱藏）
         imageGroup.createEl('div', { cls: 'easynote-spacer' });
         this.activeLayerLabel = imageGroup.createEl('span', { cls: 'easynote-active-layer' });
@@ -891,6 +900,17 @@ class EasyNoteView extends ItemView {
 
             this.canvas.setPointerCapture(e.pointerId);
             const { x: mx, y: my } = this.toCanvasCoords(e);
+
+            // 平移鎖定模式：單指單點也當作平移，不觸發任何圖層操作
+            if (this.tool === 'pan') {
+                this.isPanning     = true;
+                this.panStartX     = e.clientX;
+                this.panStartY     = e.clientY;
+                this.panScrollLeft = this.canvasWrapper.scrollLeft;
+                this.panScrollTop  = this.canvasWrapper.scrollTop;
+                this.canvas.style.cursor = 'grabbing';
+                return;
+            }
 
             if (this.tool === 'text') {
                 // 文字工具：搜尋是否點到已有文字圖層
@@ -1524,7 +1544,7 @@ class EasyNoteView extends ItemView {
             }
             if (e.button === 1) {
                 this.isPanning = false;
-                this.canvas.style.cursor = this.tool === 'draw' ? 'crosshair' : (this.tool === 'text' ? 'text' : (this.tool === 'paintselect' ? 'crosshair' : 'default'));
+                this.canvas.style.cursor = this.tool === 'draw' ? 'crosshair' : (this.tool === 'text' ? 'text' : (this.tool === 'paintselect' ? 'crosshair' : (this.tool === 'pan' ? 'grab' : 'default')));
                 return;
             }
             if (this.tool === 'paintselect') {
@@ -2767,7 +2787,7 @@ class EasyNoteView extends ItemView {
 
     // ── 工具切換 ──────────────────────────────────────────────────────────────
 
-    private setTool(t: 'draw' | 'select' | 'text' | 'paintselect'): void {
+    private setTool(t: 'draw' | 'select' | 'text' | 'paintselect' | 'pan'): void {
         // 離開 paintselect 時先 commit fragment
         if (this.tool === 'paintselect' && t !== 'paintselect') {
             this.commitFragment();
@@ -2779,6 +2799,7 @@ class EasyNoteView extends ItemView {
         this.imgSelCurrent = null;
         this.tool = t;
         this.paintSelectBtn.toggleClass('active', t === 'paintselect');
+        this.panLockBtn.toggleClass('active', t === 'pan');
         if (t === 'draw') {
             this.canvas.style.cursor = 'crosshair';
             this.selectBtn.removeClass('active');
@@ -2796,6 +2817,12 @@ class EasyNoteView extends ItemView {
             this.eraserBtn.removeClass('active');
         } else { // paintselect
             this.canvas.style.cursor = 'crosshair';
+            this.selectBtn.removeClass('active');
+            this.textBtn.removeClass('active');
+            this.eraserBtn.removeClass('active');
+        }
+        if (t === 'pan') {
+            this.canvas.style.cursor = 'grab';
             this.selectBtn.removeClass('active');
             this.textBtn.removeClass('active');
             this.eraserBtn.removeClass('active');
