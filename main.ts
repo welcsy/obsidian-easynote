@@ -71,8 +71,10 @@ interface EasyNoteSettings {
     defaultCanvasHeight: number;
     paintScale:          number; // 1.0=全解析度 0.5=半解析度（效能模式）
     timezone:            string; // IANA 時區，例如 'Asia/Taipei'
-    autoSyncEnabled:     boolean; // 定時 auto-reload 開關
-    autoSyncPeriodMs:    number;  // 定時 auto-reload 間隔（毫秒）
+    autoSyncEnabled:          boolean; // 定時 auto-reload 開關
+    autoSyncPeriodMs:         number;  // 定時 auto-reload 間隔（毫秒）
+    autoPeriodicSaveEnabled:  boolean; // 定時 auto-save 開關
+    autoPeriodicSavePeriodMs: number;  // 定時 auto-save 間隔（毫秒）
 }
 const DEFAULT_SETTINGS: EasyNoteSettings = {
     defaultColorIdx:  0,
@@ -85,8 +87,10 @@ const DEFAULT_SETTINGS: EasyNoteSettings = {
     defaultCanvasHeight: 1080,
     paintScale:          1.0,
     timezone:            'Asia/Taipei',
-    autoSyncEnabled:     false,
-    autoSyncPeriodMs:    5000,
+    autoSyncEnabled:          false,
+    autoSyncPeriodMs:         5000,
+    autoPeriodicSaveEnabled:  false,
+    autoPeriodicSavePeriodMs: 60000,
 };
 
 // ─── .enote 專案格式 ──────────────────────────────────────────────────────────
@@ -342,8 +346,10 @@ class EasyNoteView extends ItemView {
     private autoSaveTimer:   ReturnType<typeof setTimeout> | null = null;
     private lastAutoSaveTime: Date | null = null;
     private static readonly AUTOSAVE_DEBOUNCE_MS = 3000;   // 最後一次變更後 3 秒觸發
-    private _autoSyncTimer:  ReturnType<typeof setInterval> | null = null; // 定時 auto-sync
-    private autoSyncBtn!:    HTMLButtonElement;
+    private _autoSyncTimer:          ReturnType<typeof setInterval> | null = null; // 定時 auto-sync
+    private autoSyncBtn!:             HTMLButtonElement;
+    private _autoPeriodicSaveTimer:   ReturnType<typeof setInterval> | null = null; // 定時 auto-save
+    private autoPeriodicSaveBtn!:     HTMLButtonElement;
     private static readonly AUTOSAVE_FILENAME    = 'EasyNote-autosave.enote';
 
     // 歷史記錄（Undo/Redo）
@@ -387,6 +393,7 @@ class EasyNoteView extends ItemView {
         this.paintScale         = this.settings.paintScale ?? 1.0;
         // 從設定啟動定時 auto-sync
         if (this.settings.autoSyncEnabled) this.startAutoSync();
+        if (this.settings.autoPeriodicSaveEnabled) this.startPeriodicSave();
         this.imageLayers        = [];
         this.textLayers         = [];
         this.selectedIdx        = -1;
@@ -464,6 +471,7 @@ class EasyNoteView extends ItemView {
             this.autoSaveTimer = null;
         }
         this.stopAutoSync();
+        this.stopPeriodicSave();
         if ((this.settings.startupMode ?? 'new') === 'previous') {
             // 打開前一次模式：寫出最新暫存
             this.autoSaveDirect();
@@ -843,7 +851,7 @@ class EasyNoteView extends ItemView {
             cls:   'easynote-btn easynote-btn-icon',
             title: '定時自動重新載入開關',
         });
-        setIcon(this.autoSyncBtn, 'clock');
+        setIcon(this.autoSyncBtn, 'refresh-cw');
         this.autoSyncBtn.addEventListener('click', () => {
             this.settings.autoSyncEnabled = !this.settings.autoSyncEnabled;
             this.saveSettings();
@@ -851,6 +859,23 @@ class EasyNoteView extends ItemView {
                 this.startAutoSync();
             } else {
                 this.stopAutoSync();
+            }
+            this.refreshStatus();
+        });
+
+        // 定時 auto-save 開關按鈕
+        this.autoPeriodicSaveBtn = canvasActions.createEl('button', {
+            cls:   'easynote-btn easynote-btn-icon',
+            title: '定時自動儲存開關',
+        });
+        setIcon(this.autoPeriodicSaveBtn, 'clock');
+        this.autoPeriodicSaveBtn.addEventListener('click', () => {
+            this.settings.autoPeriodicSaveEnabled = !this.settings.autoPeriodicSaveEnabled;
+            this.saveSettings();
+            if (this.settings.autoPeriodicSaveEnabled) {
+                this.startPeriodicSave();
+            } else {
+                this.stopPeriodicSave();
             }
             this.refreshStatus();
         });
@@ -3067,6 +3092,12 @@ class EasyNoteView extends ItemView {
                 ? `定時重新載入：開啟（每 ${(this.settings.autoSyncPeriodMs ?? 1000) / 1000} 秒）`
                 : '定時重新載入：關閉';
         }
+        if (this.autoPeriodicSaveBtn) {
+            this.autoPeriodicSaveBtn.toggleClass('easynote-btn-active', this.settings.autoPeriodicSaveEnabled ?? false);
+            this.autoPeriodicSaveBtn.title = this.settings.autoPeriodicSaveEnabled
+                ? `定時儲存：開啟（每 ${(this.settings.autoPeriodicSavePeriodMs ?? 60000) / 1000} 秒）`
+                : '定時儲存：關閉';
+        }
 
         const zoomStr = `縮放: ${Math.round(this.zoom * 100)}%`;
         const saveStr = this.lastAutoSaveTime
@@ -3707,6 +3738,23 @@ class EasyNoteView extends ItemView {
         if (this._autoSyncTimer !== null) {
             clearInterval(this._autoSyncTimer);
             this._autoSyncTimer = null;
+        }
+    }
+
+    /** 啟動定時 auto-save（setInterval，依設定週期呼叫 autoSaveDirect） */
+    private startPeriodicSave(): void {
+        this.stopPeriodicSave();
+        const ms = Math.max(1000, this.settings.autoPeriodicSavePeriodMs ?? 60000);
+        this._autoPeriodicSaveTimer = setInterval(() => {
+            this.autoSaveDirect();
+        }, ms);
+    }
+
+    /** 停止定時 auto-save */
+    private stopPeriodicSave(): void {
+        if (this._autoPeriodicSaveTimer !== null) {
+            clearInterval(this._autoPeriodicSaveTimer);
+            this._autoPeriodicSaveTimer = null;
         }
     }
 
@@ -5073,6 +5121,34 @@ class EasyNoteSettingTab extends PluginSettingTab {
                         const sec = parseFloat(value);
                         if (sec >= 1) {
                             this.plugin.settings.autoSyncPeriodMs = sec * 1000;
+                            await this.plugin.saveSettings();
+                        }
+                    })
+            );
+
+        // 定時 auto-save
+        new Setting(containerEl)
+            .setName('定時自動儲存')
+            .setDesc('開啟後，畫布會依照設定的間隔定時自動儲存（工具列按鈕也可即時切換）')
+            .addToggle((toggle) => {
+                toggle.setValue(this.plugin.settings.autoPeriodicSaveEnabled ?? false);
+                toggle.onChange(async (value) => {
+                    this.plugin.settings.autoPeriodicSaveEnabled = value;
+                    await this.plugin.saveSettings();
+                });
+            });
+
+        new Setting(containerEl)
+            .setName('自動儲存間隔（秒）')
+            .setDesc('定時自動儲存的間隔秒數，最短 1 秒')
+            .addText((text) =>
+                text
+                    .setPlaceholder('60')
+                    .setValue(String((this.plugin.settings.autoPeriodicSavePeriodMs ?? 60000) / 1000))
+                    .onChange(async (value) => {
+                        const sec = parseFloat(value);
+                        if (sec >= 1) {
+                            this.plugin.settings.autoPeriodicSavePeriodMs = sec * 1000;
                             await this.plugin.saveSettings();
                         }
                     })
