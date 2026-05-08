@@ -496,11 +496,12 @@ class EasyNoteView extends ItemView {
 雙擊自訂顏色`,
             });
             (btn as HTMLElement).style.background = this.colors[i];
-            btn.addEventListener('click', () => this.setColor(i));
+            // 單擊 / 單點 → 選色
+            let colorBtnLongPressTimer: ReturnType<typeof setTimeout> | null = null;
+            let colorBtnLongPressFired = false;
+            let colorBtnStartX = 0, colorBtnStartY = 0;
 
-            // 雙擊 → 在按鈕正下方顯示顏色選擇面板
-            btn.addEventListener('dblclick', (e) => {
-                e.stopPropagation();
+            const openColorPanel = () => {
                 // 關閉其他已開啟的面板
                 document.querySelectorAll('.easynote-color-panel').forEach(el => el.remove());
 
@@ -536,7 +537,40 @@ class EasyNoteView extends ItemView {
                 requestAnimationFrame(() =>
                     document.addEventListener('mousedown', close, true)
                 );
+            };
+
+            btn.addEventListener('click', (e) => {
+                if (colorBtnLongPressFired) { colorBtnLongPressFired = false; return; }
+                this.setColor(i);
             });
+
+            // 長按 → 開啟顏色選擇面板（支援 Android 觸控與桌面滑鼠）
+            btn.addEventListener('pointerdown', (e) => {
+                colorBtnLongPressFired = false;
+                colorBtnStartX = e.clientX;
+                colorBtnStartY = e.clientY;
+                colorBtnLongPressTimer = setTimeout(() => {
+                    colorBtnLongPressFired = true;
+                    colorBtnLongPressTimer = null;
+                    openColorPanel();
+                }, EasyNoteView.LONG_PRESS_MS);
+            });
+            btn.addEventListener('pointermove', (e) => {
+                if (!colorBtnLongPressTimer) return;
+                const dx = e.clientX - colorBtnStartX, dy = e.clientY - colorBtnStartY;
+                if (Math.hypot(dx, dy) > EasyNoteView.LONG_PRESS_SLOP) {
+                    clearTimeout(colorBtnLongPressTimer);
+                    colorBtnLongPressTimer = null;
+                }
+            });
+            const cancelColorLongPress = () => {
+                if (colorBtnLongPressTimer) { clearTimeout(colorBtnLongPressTimer); colorBtnLongPressTimer = null; }
+            };
+            btn.addEventListener('pointerup',     cancelColorLongPress);
+            btn.addEventListener('pointercancel', cancelColorLongPress);
+
+            // 桌面雙擊仍可開啟（保留習慣）
+            btn.addEventListener('dblclick', (e) => { e.stopPropagation(); openColorPanel(); });
 
             this.colorBtns.push(btn);
         }
