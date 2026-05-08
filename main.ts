@@ -269,7 +269,7 @@ class EasyNoteView extends ItemView {
     } | null = null;
 
     // 工具模式
-    private tool:       'draw' | 'select' | 'text' | 'paintselect' | 'pan' = 'draw';
+    private tool:       'draw' | 'select' | 'text' | 'paintselect' | 'pan' = 'pan';
     private drawing     = false;
     private prevX       = 0;
     private prevY       = 0;
@@ -365,7 +365,7 @@ class EasyNoteView extends ItemView {
         this.colors             = [...(this.settings.defaultColors ?? COLORS)];
         this.colorNames         = [...COLOR_NAMES];
         this.eraser             = false;
-        this.tool               = 'draw';
+        this.tool               = 'pan';
         this.imageLayers        = [];
         this.textLayers         = [];
         this.selectedIdx        = -1;
@@ -3695,11 +3695,9 @@ class EasyNoteView extends ItemView {
             // 重新從 Vault 讀取連結筆記的最新內容
             await this.resolveLinkedLayers();
 
-            this.setTool('draw');
+            this.setTool('pan');
             this.applyZoom();
             this.render();
-            // 重置歷史記錄，載入狀態作為起點
-            this.history    = [];
             this.historyIdx = -1;
             this.pushHistory('載入專案');
             this.lastProjectName = file.basename.replace(/\.enote$/i, '');
