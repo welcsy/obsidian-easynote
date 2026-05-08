@@ -626,10 +626,11 @@ class EasyNoteView extends ItemView {
         row1.createEl('div', { cls: 'easynote-sep' });
 
         // ── 圖片 群組 ────────────────────────────────────────────────────────
-        row1.createEl('span', { cls: 'easynote-group-label', text: '圖片' });
+        const imageGroup = row1.createEl('div', { cls: 'easynote-image-group-wrap' });
+        imageGroup.createEl('span', { cls: 'easynote-group-label', text: '圖片' });
 
         // 選取工具（快捷 S）
-        this.selectBtn = row1.createEl('button', {
+        this.selectBtn = imageGroup.createEl('button', {
             cls:   'easynote-btn easynote-btn-icon',
             title: '選取並移動/縮放圖片（快捷：S）\nDel 刪除選取圖片',
         });
@@ -637,14 +638,14 @@ class EasyNoteView extends ItemView {
         this.selectBtn.addEventListener('click', () => this.setTool('select'));
 
         // 載入本機圖片
-        const loadBtn = row1.createEl('button', {
+        const loadBtn = imageGroup.createEl('button', {
             cls:   'easynote-btn',
             text:  '載入本機圖片',
             title: '從本機載入圖片（也可拖曳或 Ctrl+V）',
         });
         loadBtn.addEventListener('click', () => this.fileInput.click());
 
-        this.fileInput        = row1.createEl('input');
+        this.fileInput        = imageGroup.createEl('input');
         this.fileInput.type   = 'file';
         this.fileInput.accept = 'image/*';
         this.fileInput.style.display = 'none';
@@ -655,7 +656,7 @@ class EasyNoteView extends ItemView {
         });
 
         // 載入Obsidian圖片
-        const vaultBtn = row1.createEl('button', {
+        const vaultBtn = imageGroup.createEl('button', {
             cls:   'easynote-btn',
             text:  '載入Obsidian圖片',
             title: '從 Vault 中選取圖片',
@@ -665,7 +666,7 @@ class EasyNoteView extends ItemView {
         });
 
         // 載入筆記
-        const loadNoteBtn = row1.createEl('button', {
+        const loadNoteBtn = imageGroup.createEl('button', {
             cls:   'easynote-btn',
             text:  '載入筆記',
             title: '將 Vault .md 筆記以 Markdown 圖層載入（每次開啟自動更新）',
@@ -675,8 +676,8 @@ class EasyNoteView extends ItemView {
         });
 
         // 目前圕層類型標示（右側，已隱藏）
-        row1.createEl('div', { cls: 'easynote-spacer' });
-        this.activeLayerLabel = row1.createEl('span', { cls: 'easynote-active-layer' });
+        imageGroup.createEl('div', { cls: 'easynote-spacer' });
+        this.activeLayerLabel = imageGroup.createEl('span', { cls: 'easynote-active-layer' });
         this.activeLayerLabel.style.display = 'none';
 
         // ── 第二行 ──────────────────────────────────────────────────────────
@@ -764,10 +765,10 @@ class EasyNoteView extends ItemView {
             new CanvasSizeModal(this.app, this.canvas.width, this.canvas.height,
                 (w, h) => this.setCanvasSize(w, h)).open();
         });
-        row2.createEl('div', { cls: 'easynote-sep' });
+        const canvasActions = row2.createEl('div', { cls: 'easynote-canvas-actions-wrap' });
 
         // 儲存專案 (.enote)
-        const saveProjectBtn = row2.createEl('button', {
+        const saveProjectBtn = canvasActions.createEl('button', {
             cls:   'easynote-btn',
             text:  '儲存畫布',
             title: '儲存可繼續編輯的 .enote 專案檔',
@@ -779,7 +780,7 @@ class EasyNoteView extends ItemView {
         });
 
         // 載入專案 (.enote)
-        const loadProjectBtn = row2.createEl('button', {
+        const loadProjectBtn = canvasActions.createEl('button', {
             cls:   'easynote-btn',
             text:  '載入畫布',
             title: '從 Vault 載入 .enote 專案檔',
@@ -789,7 +790,7 @@ class EasyNoteView extends ItemView {
         });
 
         // 儲存檔案
-        const saveBtn = row2.createEl('button', {
+        const saveBtn = canvasActions.createEl('button', {
             cls:   'easynote-btn easynote-btn-save',
             text:  '匯出',
             title: '將手繪圖儲存到 Vault',
@@ -800,8 +801,8 @@ class EasyNoteView extends ItemView {
             new SaveModal(this.app, defaultName, (name, fmt) => this.saveDrawing(name, fmt)).open();
         });
 
-        row2.createEl('div', { cls: 'easynote-spacer' });
-        this.statusLabel = row2.createEl('span', { cls: 'easynote-status' });
+        canvasActions.createEl('div', { cls: 'easynote-spacer' });
+        this.statusLabel = canvasActions.createEl('span', { cls: 'easynote-status' });
     }
 
     // ── Canvas 建構 ───────────────────────────────────────────────────────────

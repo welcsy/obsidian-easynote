@@ -602,3 +602,53 @@
     justify-content: flex-end;
     gap:             8px;
 }
+
+/* ── 圖片群組 / 畫布操作群組 wrap（預設行內排列） ───────────────────── */
+.easynote-image-group-wrap,
+.easynote-canvas-actions-wrap {
+    display:     flex;
+    align-items: center;
+    gap:         6px;
+    flex-shrink: 0;
+}
+.easynote-image-group-wrap .easynote-spacer,
+.easynote-canvas-actions-wrap .easynote-spacer {
+    flex: 1;
+}
+
+/* ── Android 觸控裝置：工具列 icon 放大 125% ─────────────────────────── */
+@media (hover: none) and (pointer: coarse) {
+    .easynote-btn.easynote-btn-icon {
+        width:  35px;
+        height: 35px;
+    }
+    .easynote-btn.easynote-btn-icon svg {
+        width:  20px;
+        height: 20px;
+    }
+    .easynote-color-btn {
+        width:  33px;
+        height: 33px;
+    }
+    .easynote-toolbar-row {
+        height: 44px;
+    }
+}
+
+/* ── Android 直立模式：圖片群組與畫布操作獨立成列 ───────────────────── */
+@media (hover: none) and (pointer: coarse) and (orientation: portrait) {
+    .easynote-toolbar-row {
+        flex-wrap:      wrap;
+        height:         auto;
+        min-height:     44px;
+        padding-top:    4px;
+        padding-bottom: 4px;
+        overflow-x:     hidden;
+    }
+    .easynote-image-group-wrap,
+    .easynote-canvas-actions-wrap {
+        flex-basis:  100%;
+        border-top:  1px solid var(--background-modifier-border);
+        padding-top: 4px;
+    }
+}
