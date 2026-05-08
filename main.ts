@@ -846,12 +846,12 @@ class EasyNoteView extends ItemView {
                 this.pinchStartZoom = this.zoom;
                 this.pinchCenterX   = (ptrs[0].x + ptrs[1].x) / 2;
                 this.pinchCenterY   = (ptrs[0].y + ptrs[1].y) / 2;
-                // 以雙指中心開始平移
-                this.isPanning     = true;
-                this.panStartX     = this.pinchCenterX;
-                this.panStartY     = this.pinchCenterY;
-                this.panScrollLeft = this.canvasWrapper.scrollLeft;
-                this.panScrollTop  = this.canvasWrapper.scrollTop;
+                // 以雙指中心開始平移（增量模式，每幀更新 panStartX/Y）
+                this.isPanning  = true;
+                this.panStartX  = this.pinchCenterX;
+                this.panStartY  = this.pinchCenterY;
+                // 確保第二根手指的 pointermove 也能送到 canvas
+                this.canvas.setPointerCapture(e.pointerId);
                 return;
             }
 
@@ -1132,29 +1132,32 @@ class EasyNoteView extends ItemView {
             // 雙指 pinch-to-zoom + 平移
             if (this.activePointers.size === 2) {
                 const ptrs = [...this.activePointers.values()];
-                // 縮放
+                const cx = (ptrs[0].x + ptrs[1].x) / 2;
+                const cy = (ptrs[0].y + ptrs[1].y) / 2;
+                // 縮放（以當前雙指中心為 pivot，每幀重算，避免跳動）
                 if (this.pinchStartDist && this.pinchStartZoom !== null) {
-                    const dx   = ptrs[1].x - ptrs[0].x;
-                    const dy   = ptrs[1].y - ptrs[0].y;
-                    const dist = Math.hypot(dx, dy);
+                    const ddx  = ptrs[1].x - ptrs[0].x;
+                    const ddy  = ptrs[1].y - ptrs[0].y;
+                    const dist = Math.hypot(ddx, ddy);
                     const MIN_ZOOM = 0.1, MAX_ZOOM = 8.0;
                     const newZoom  = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM,
                         this.pinchStartZoom * (dist / this.pinchStartDist)));
-                    const wRect = this.canvasWrapper.getBoundingClientRect();
-                    const cx    = (this.pinchCenterX! - wRect.left);
-                    const cy    = (this.pinchCenterY! - wRect.top);
-                    const ratio = newZoom / this.zoom;
+                    const wRect  = this.canvasWrapper.getBoundingClientRect();
+                    const pivotX = cx - wRect.left;
+                    const pivotY = cy - wRect.top;
+                    const ratio  = newZoom / this.zoom;
                     this.zoom = newZoom;
                     this.applyZoom();
-                    this.canvasWrapper.scrollLeft = (this.canvasWrapper.scrollLeft + cx) * ratio - cx;
-                    this.canvasWrapper.scrollTop  = (this.canvasWrapper.scrollTop  + cy) * ratio - cy;
+                    this.canvasWrapper.scrollLeft = (this.canvasWrapper.scrollLeft + pivotX) * ratio - pivotX;
+                    this.canvasWrapper.scrollTop  = (this.canvasWrapper.scrollTop  + pivotY) * ratio - pivotY;
                     this.refreshStatus();
                 }
-                // 雙指平移（以中心點位移）
-                const cx = (ptrs[0].x + ptrs[1].x) / 2;
-                const cy = (ptrs[0].y + ptrs[1].y) / 2;
-                this.canvasWrapper.scrollLeft = this.panScrollLeft - (cx - this.panStartX);
-                this.canvasWrapper.scrollTop  = this.panScrollTop  - (cy - this.panStartY);
+                // 雙指平移：增量方式，疊加在縮放後的 scroll 上，避免互相覆蓋
+                this.canvasWrapper.scrollLeft -= (cx - this.panStartX);
+                this.canvasWrapper.scrollTop  -= (cy - this.panStartY);
+                // 更新基準點供下一幀使用
+                this.panStartX = cx;
+                this.panStartY = cy;
                 return;
             }
 

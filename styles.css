@@ -633,6 +633,14 @@
     .easynote-toolbar-row {
         height: 44px;
     }
+    /* 捲軸在觸控裝置上放大，更容易看到與操作 */
+    .easynote-canvas-wrapper::-webkit-scrollbar {
+        width:  8px;
+        height: 8px;
+    }
+    .easynote-canvas-wrapper::-webkit-scrollbar-thumb {
+        background: rgba(200, 200, 200, 0.75);
+    }
 }
 
 /* ── Android 直立模式：圖片群組與畫布操作獨立成列 ───────────────────── */

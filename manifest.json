@@ -1,7 +1,7 @@
 {
   "id": "easynote",
   "name": "Easy Note",
-  "version": "1.0.44",
+  "version": "1.0.45",
   "minAppVersion": "1.0.0",
   "description": "在 Obsidian 側邊欄開啟全功能手繪畫布。支援多色畫筆、橡皮擦、圖片圖層（含多選圈選）、文字圖層、Markdown 圖層（支援 [[wikilink]] 與 [text](url) 超連結）、可命名的復原 / 重做歷程，並可匯出 PNG 到 Vault。畫布狀態以 .enote 格式儲存。",
   "author": "welcsy",
