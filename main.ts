@@ -4286,6 +4286,9 @@ class CanvasSizeModal extends Modal {
     private currentW: number;
     private currentH: number;
     private onApply: (w: number, h: number) => void;
+    private hintEl!: HTMLElement;
+    private wInput!: HTMLInputElement;
+    private hInput!: HTMLInputElement;
 
     constructor(app: App, currentW: number, currentH: number, onApply: (w: number, h: number) => void) {
         super(app);
@@ -4298,7 +4301,7 @@ class CanvasSizeModal extends Modal {
         const { contentEl } = this;
         contentEl.empty();
         contentEl.createEl('h3', { text: '設定畫布大小' });
-        contentEl.createEl('p', {
+        this.hintEl = contentEl.createEl('p', {
             cls:  'easynote-size-hint',
             text: `目前：${this.currentW} × ${this.currentH}　（現有內容會保留在左上角）`,
         });
@@ -4306,51 +4309,56 @@ class CanvasSizeModal extends Modal {
         // 輸入列
         const inputRow = contentEl.createEl('div', { cls: 'easynote-size-row' });
 
-        const wInput = inputRow.createEl('input');
-        wInput.type  = 'number';
-        wInput.min   = '100';
-        wInput.max   = '16000';
-        wInput.value = String(this.currentW);
-        wInput.className = 'easynote-size-input';
+        this.wInput = inputRow.createEl('input');
+        this.wInput.type  = 'number';
+        this.wInput.min   = '100';
+        this.wInput.max   = '16000';
+        this.wInput.value = String(this.currentW);
+        this.wInput.className = 'easynote-size-input';
 
         inputRow.createEl('span', { text: ' × ', cls: 'easynote-size-x' });
 
-        const hInput = inputRow.createEl('input');
-        hInput.type  = 'number';
-        hInput.min   = '100';
-        hInput.max   = '16000';
-        hInput.value = String(this.currentH);
-        hInput.className = 'easynote-size-input';
+        this.hInput = inputRow.createEl('input');
+        this.hInput.type  = 'number';
+        this.hInput.min   = '100';
+        this.hInput.max   = '16000';
+        this.hInput.value = String(this.currentH);
+        this.hInput.className = 'easynote-size-input';
 
         // 快速預設按鈕
         const presetRow = contentEl.createEl('div', { cls: 'easynote-size-presets' });
         const presets: [string, () => void][] = [
-            ['×2 寬',  () => { wInput.value = String(this.currentW * 2); }],
-            ['×2 高',  () => { hInput.value = String(this.currentH * 2); }],
-            ['×2 全',  () => { wInput.value = String(this.currentW * 2); hInput.value = String(this.currentH * 2); }],
-            ['1920×1080', () => { wInput.value = '1920'; hInput.value = '1080'; }],
-            ['3840×1080', () => { wInput.value = '3840'; hInput.value = '1080'; }],
-            ['3840×2160', () => { wInput.value = '3840'; hInput.value = '2160'; }],
+            ['×2 寬',  () => { this.wInput.value = String((parseInt(this.wInput.value) || this.currentW) * 2); }],
+            ['×2 高',  () => { this.hInput.value = String((parseInt(this.hInput.value) || this.currentH) * 2); }],
+            ['×2 全',  () => { this.wInput.value = String((parseInt(this.wInput.value) || this.currentW) * 2); this.hInput.value = String((parseInt(this.hInput.value) || this.currentH) * 2); }],
+            ['1920×1080', () => { this.wInput.value = '1920'; this.hInput.value = '1080'; }],
+            ['3840×1080', () => { this.wInput.value = '3840'; this.hInput.value = '1080'; }],
+            ['3840×2160', () => { this.wInput.value = '3840'; this.hInput.value = '2160'; }],
         ];
         for (const [label, fn] of presets) {
             const btn = presetRow.createEl('button', { cls: 'easynote-btn', text: label });
             btn.addEventListener('click', fn);
         }
 
-        // 確認 / 取消
+        // 確認 / 關閉（套用後不關閉，可繼續調整）
         const btnRow = contentEl.createEl('div', { cls: 'easynote-size-btnrow' });
         const applyBtn = btnRow.createEl('button', {
             cls:  'easynote-btn easynote-btn-save',
             text: '套用',
         });
         applyBtn.addEventListener('click', () => {
-            const w = Math.max(100, Math.min(16000, parseInt(wInput.value) || this.currentW));
-            const h = Math.max(100, Math.min(16000, parseInt(hInput.value) || this.currentH));
+            const w = Math.max(100, Math.min(16000, parseInt(this.wInput.value) || this.currentW));
+            const h = Math.max(100, Math.min(16000, parseInt(this.hInput.value) || this.currentH));
             this.onApply(w, h);
-            this.close();
+            // 更新「目前尺寸」提示，不關閉 Modal
+            this.currentW = w;
+            this.currentH = h;
+            this.wInput.value = String(w);
+            this.hInput.value = String(h);
+            this.hintEl.textContent = `目前：${w} × ${h}　（現有內容會保留在左上角）`;
         });
-        const cancelBtn = btnRow.createEl('button', { cls: 'easynote-btn', text: '取消' });
-        cancelBtn.addEventListener('click', () => this.close());
+        const closeBtn = btnRow.createEl('button', { cls: 'easynote-btn', text: '關閉' });
+        closeBtn.addEventListener('click', () => this.close());
     }
 
     onClose(): void { this.contentEl.empty(); }
