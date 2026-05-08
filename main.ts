@@ -69,6 +69,7 @@ interface EasyNoteSettings {
     startupMode:      'previous' | 'new';
     defaultCanvasWidth:  number;
     defaultCanvasHeight: number;
+    paintScale:          number; // 1.0=全解析度 0.5=半解析度（效能模式）
 }
 const DEFAULT_SETTINGS: EasyNoteSettings = {
     defaultColorIdx:  0,
@@ -79,6 +80,7 @@ const DEFAULT_SETTINGS: EasyNoteSettings = {
     startupMode:      'new',
     defaultCanvasWidth:  1920,
     defaultCanvasHeight: 1080,
+    paintScale:          1.0,
 };
 
 // ─── .enote 專案格式 ──────────────────────────────────────────────────────────
@@ -314,6 +316,12 @@ class EasyNoteView extends ItemView {
     private pinchCenterY:   number | null = null;
     private gestureActive:  boolean = false; // 雙指手勢結束後，殘餘單指應被忽略
     private _rafId:         number | null = null; // rAF throttle for render during drawing
+    /** 筆觸解析度縮放（1.0 = 全解析度；0.5 = 半解析 → paintCanvas 1/4 大小） */
+    private paintScale = 1.0;
+    /** Viewport paint cache：畫筆期間避免上傳大畫布紋理 */
+    private _vpCache:  HTMLCanvasElement | null = null;
+    private _vpCacheX = 0;  // viewport 左上角（畫布邏輯座標）
+    private _vpCacheY = 0;
 
     // 長按偵測（Android 觸控選單）
     private longPressTimer:    ReturnType<typeof setTimeout> | null = null;
@@ -366,6 +374,7 @@ class EasyNoteView extends ItemView {
         this.colorNames         = [...COLOR_NAMES];
         this.eraser             = false;
         this.tool               = 'pan';
+        this.paintScale         = this.settings.paintScale ?? 1.0;
         this.imageLayers        = [];
         this.textLayers         = [];
         this.selectedIdx        = -1;
@@ -1150,6 +1159,7 @@ class EasyNoteView extends ItemView {
                 this.pushHistory(this.eraser ? '橡皮擦' : '筆觸');  // 每次筆觸開始前保存快照
                 this.drawing = true;
                 this.prevX = mx; this.prevY = my;
+                this.initViewportCache();  // 初始化 viewport paint cache
                 this.paintDot(mx, my);
             }
         });
@@ -1609,11 +1619,11 @@ class EasyNoteView extends ItemView {
             }
             this.multiSelDrag  = null;
             this.drawing       = false;
+            this._vpCache      = null;  // 清除 viewport cache，觸發下一次完整渲染
             this.dragState     = null;
             this.textDragState = null;
             this.mdDragState   = null;
-        });
-        this.canvas.addEventListener('pointercancel', (e) => {
+            this.scheduleRender();  // 筆觸結束後確保以完整畫布合成一次, (e) => {
             this.activePointers.delete(e.pointerId);
             if (this.longPressTimer) { clearTimeout(this.longPressTimer); this.longPressTimer = null; }
             if (this.activePointers.size === 0) {
@@ -1626,6 +1636,7 @@ class EasyNoteView extends ItemView {
             if (e.pointerType !== 'mouse') return;  // 觸控滑出由 pointerup/cancel 處理
             this.isPanning     = false;
             this.drawing       = false;
+            this._vpCache      = null;
             this.dragState     = null;
             this.textDragState = null;
             this.mdDragState   = null;
@@ -1701,14 +1712,17 @@ class EasyNoteView extends ItemView {
     // ── Canvas 大小調整 ───────────────────────────────────────────────────────
 
     private applyCanvasSize(w: number, h: number): void {
-        // 備份 paintCanvas
+        const PS  = this.paintScale;
+        const pw  = Math.max(1, Math.round(w * PS));
+        const ph  = Math.max(1, Math.round(h * PS));
+        // 備份 paintCanvas（保留原始 PS 尺寸內容）
         const tmp = document.createElement('canvas');
-        tmp.width  = this.paintCanvas.width  || w;
-        tmp.height = this.paintCanvas.height || h;
+        tmp.width  = this.paintCanvas.width  || pw;
+        tmp.height = this.paintCanvas.height || ph;
         tmp.getContext('2d')!.drawImage(this.paintCanvas, 0, 0);
 
-        this.paintCanvas.width  = w;
-        this.paintCanvas.height = h;
+        this.paintCanvas.width  = pw;
+        this.paintCanvas.height = ph;
         // 不填白底，讓繪畫層保持透明（舊內容由 tmp 還原）
         this.paintCtx.drawImage(tmp, 0, 0);
 
@@ -1838,7 +1852,13 @@ class EasyNoteView extends ItemView {
             this.ctx.restore();
         }
         // 4. 繪畫層（最上方）
-        this.ctx.drawImage(this.paintCanvas, 0, 0);
+        // 筆觸期間：使用小型 viewport cache 避免上傳 128MB+ 大畫布紋理
+        if (this.drawing && this._vpCache) {
+            this.ctx.drawImage(this._vpCache, this._vpCacheX, this._vpCacheY);
+        } else {
+            // 一般情況：完整畫布合成（paintScale < 1 時自動拉伸回全畫布尺寸）
+            this.ctx.drawImage(this.paintCanvas, 0, 0, this.canvas.width, this.canvas.height);
+        }
         // 4a. 繪畫選取 fragment（繪畫層上方）
         if (this.paintFragment) {
             const f   = this.paintFragment;
@@ -2098,15 +2118,21 @@ class EasyNoteView extends ItemView {
     }
 
     private extractFragment(r: { x: number; y: number; w: number; h: number }): void {
+        const PS             = this.paintScale;
         const offscreen      = document.createElement('canvas');
         offscreen.width      = r.w;
         offscreen.height     = r.h;
-        offscreen.getContext('2d')!.drawImage(this.paintCanvas, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
+        // paintCanvas 儲存於 PS 縮放尺寸，讀取時需乘以 PS
+        offscreen.getContext('2d')!.drawImage(
+            this.paintCanvas,
+            r.x * PS, r.y * PS, r.w * PS, r.h * PS,
+            0, 0, r.w, r.h,
+        );
         // 從 paintCanvas 挖除選取區
         this.paintCtx.save();
         this.paintCtx.globalCompositeOperation = 'destination-out';
         this.paintCtx.fillStyle = 'rgba(0,0,0,1)';
-        this.paintCtx.fillRect(r.x, r.y, r.w, r.h);
+        this.paintCtx.fillRect(r.x * PS, r.y * PS, r.w * PS, r.h * PS);
         this.paintCtx.restore();
         this.paintFragment = { offscreen, x: r.x, y: r.y, w: r.w, h: r.h };
         this.render();
@@ -2115,17 +2141,18 @@ class EasyNoteView extends ItemView {
     private commitFragment(): void {
         if (!this.paintFragment) return;
         this.pushHistory('合併繪畫區塊');                 // 合併繪畫區塊前先存快照
+        const PS  = this.paintScale;
         const f   = this.paintFragment;
         const rot = f.rotation || 0;
         if (rot !== 0) {
-            const cx = f.x + f.w / 2, cy = f.y + f.h / 2;
+            const cx = (f.x + f.w / 2) * PS, cy = (f.y + f.h / 2) * PS;
             this.paintCtx.save();
             this.paintCtx.translate(cx, cy);
             this.paintCtx.rotate(rot);
-            this.paintCtx.drawImage(f.offscreen, 0, 0, f.offscreen.width, f.offscreen.height, -f.w / 2, -f.h / 2, f.w, f.h);
+            this.paintCtx.drawImage(f.offscreen, 0, 0, f.offscreen.width, f.offscreen.height, -f.w * PS / 2, -f.h * PS / 2, f.w * PS, f.h * PS);
             this.paintCtx.restore();
         } else {
-            this.paintCtx.drawImage(f.offscreen, 0, 0, f.offscreen.width, f.offscreen.height, f.x, f.y, f.w, f.h);
+            this.paintCtx.drawImage(f.offscreen, 0, 0, f.offscreen.width, f.offscreen.height, f.x * PS, f.y * PS, f.w * PS, f.h * PS);
         }
         this.paintFragment    = null;
         this.paintFragDrag    = null;
@@ -2582,7 +2609,56 @@ class EasyNoteView extends ItemView {
         });
     }
 
+    /** 在筆觸開始時初始化 viewport 畫布快取，畫筆期間 composite 這個小畫布而非全域大畫布 */
+    private initViewportCache(): void {
+        const sl = this.canvasWrapper.scrollLeft;
+        const st = this.canvasWrapper.scrollTop;
+        this._vpCacheX = sl / this.zoom;
+        this._vpCacheY = st / this.zoom;
+        const vw = Math.ceil(this.canvasWrapper.clientWidth  / this.zoom) + 2;
+        const vh = Math.ceil(this.canvasWrapper.clientHeight / this.zoom) + 2;
+        if (!this._vpCache || this._vpCache.width !== vw || this._vpCache.height !== vh) {
+            this._vpCache = document.createElement('canvas');
+            this._vpCache.width  = vw;
+            this._vpCache.height = vh;
+        }
+        const ctx = this._vpCache.getContext('2d')!;
+        ctx.clearRect(0, 0, vw, vh);
+        const PS = this.paintScale;
+        // 從 paintCanvas（PS 縮放）讀取 viewport 區域，拉伸回畫布座標
+        ctx.drawImage(
+            this.paintCanvas,
+            this._vpCacheX * PS, this._vpCacheY * PS, vw * PS, vh * PS,
+            0, 0, vw, vh,
+        );
+    }
+
+    /** 將同一筆觸同步寫入 viewport cache（canvas 座標，無 PS 縮放） */
+    private syncStrokeToCache(x1: number, y1: number, x2: number, y2: number): void {
+        if (!this._vpCache) return;
+        const ctx = this._vpCache.getContext('2d')!;
+        ctx.save();
+        ctx.translate(-this._vpCacheX, -this._vpCacheY);
+        if (this.eraser) {
+            ctx.globalCompositeOperation = 'destination-out';
+            ctx.strokeStyle = 'rgba(0,0,0,1)';
+        } else {
+            ctx.globalCompositeOperation = 'source-over';
+            ctx.globalAlpha = this.brushOpacity;
+            ctx.strokeStyle = this.colors[this.colorIdx];
+        }
+        ctx.lineWidth = this.brushSize;
+        ctx.lineCap   = 'round';
+        ctx.lineJoin  = 'round';
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+        ctx.restore();
+    }
+
     private paintDot(x: number, y: number): void {
+        const PS = this.paintScale;
         this.paintCtx.save();
         if (this.eraser) {
             this.paintCtx.globalCompositeOperation = 'destination-out';
@@ -2592,18 +2668,20 @@ class EasyNoteView extends ItemView {
             this.paintCtx.globalAlpha = this.brushOpacity;
             this.paintCtx.strokeStyle = this.colors[this.colorIdx];
         }
-        this.paintCtx.lineWidth  = this.brushSize;
+        this.paintCtx.lineWidth  = this.brushSize * PS;
         this.paintCtx.lineCap    = 'round';
         this.paintCtx.beginPath();
         // dot：moveTo 與 lineTo 同點，lineCap=round 會畫出圓點
-        this.paintCtx.moveTo(x, y);
-        this.paintCtx.lineTo(x, y);
+        this.paintCtx.moveTo(x * PS, y * PS);
+        this.paintCtx.lineTo(x * PS, y * PS);
         this.paintCtx.stroke();
         this.paintCtx.restore();
+        this.syncStrokeToCache(x, y, x, y);
         this.scheduleRender();
     }
 
     private paintStroke(x1: number, y1: number, x2: number, y2: number): void {
+        const PS = this.paintScale;
         this.paintCtx.save();
         if (this.eraser) {
             this.paintCtx.globalCompositeOperation = 'destination-out';
@@ -2614,14 +2692,15 @@ class EasyNoteView extends ItemView {
             this.paintCtx.strokeStyle = this.colors[this.colorIdx];
         }
         // lineCap/lineJoin=round 產生圓頭筆觸，單一 path stroke 取代多個 arc fill
-        this.paintCtx.lineWidth  = this.brushSize;
+        this.paintCtx.lineWidth  = this.brushSize * PS;
         this.paintCtx.lineCap    = 'round';
         this.paintCtx.lineJoin   = 'round';
         this.paintCtx.beginPath();
-        this.paintCtx.moveTo(x1, y1);
-        this.paintCtx.lineTo(x2, y2);
+        this.paintCtx.moveTo(x1 * PS, y1 * PS);
+        this.paintCtx.lineTo(x2 * PS, y2 * PS);
         this.paintCtx.stroke();
         this.paintCtx.restore();
+        this.syncStrokeToCache(x1, y1, x2, y2);
         this.scheduleRender();
     }
 
@@ -3189,12 +3268,15 @@ class EasyNoteView extends ItemView {
     }
 
     private restoreHistory(entry: HistoryEntry): void {
+        const PS = this.paintScale;
+        const pw = Math.max(1, Math.round(entry.canvasW * PS));
+        const ph = Math.max(1, Math.round(entry.canvasH * PS));
         // 若畫布尺寸不同需先調整
         if (this.canvas.width !== entry.canvasW || this.canvas.height !== entry.canvasH) {
             this.canvas.width       = entry.canvasW;
             this.canvas.height      = entry.canvasH;
-            this.paintCanvas.width  = entry.canvasW;
-            this.paintCanvas.height = entry.canvasH;
+            this.paintCanvas.width  = pw;
+            this.paintCanvas.height = ph;
             this.manualWidth        = entry.canvasW;
             this.manualHeight       = entry.canvasH;
         }
@@ -3417,7 +3499,7 @@ class EasyNoteView extends ItemView {
                     const copy = document.createElement('canvas');
                     copy.width  = r.w;
                     copy.height = r.h;
-                    copy.getContext('2d')!.drawImage(this.paintCanvas, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
+                    copy.getContext('2d')!.drawImage(this.paintCanvas, r.x * this.paintScale, r.y * this.paintScale, r.w * this.paintScale, r.h * this.paintScale, 0, 0, r.w, r.h);
                     this.clipboard = { type: 'paint', offscreen: copy, w: r.w, h: r.h };
                     new Notice('已複製繪畫選取');
                 }
@@ -3474,13 +3556,13 @@ class EasyNoteView extends ItemView {
                     const copy = document.createElement('canvas');
                     copy.width  = r.w;
                     copy.height = r.h;
-                    copy.getContext('2d')!.drawImage(this.paintCanvas, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
+                    copy.getContext('2d')!.drawImage(this.paintCanvas, r.x * this.paintScale, r.y * this.paintScale, r.w * this.paintScale, r.h * this.paintScale, 0, 0, r.w, r.h);
                     this.clipboard = { type: 'paint', offscreen: copy, w: r.w, h: r.h };
                     // 從畫布挖空選取區
                     this.paintCtx.save();
                     this.paintCtx.globalCompositeOperation = 'destination-out';
                     this.paintCtx.fillStyle = 'rgba(0,0,0,1)';
-                    this.paintCtx.fillRect(r.x, r.y, r.w, r.h);
+                    this.paintCtx.fillRect(r.x * this.paintScale, r.y * this.paintScale, r.w * this.paintScale, r.h * this.paintScale);
                     this.paintCtx.restore();
                     this.selStart   = null;
                     this.selCurrent = null;
@@ -3496,8 +3578,9 @@ class EasyNoteView extends ItemView {
         if (this.clipboard.type === 'paint') {
             // 先把現有浮動區塊合併入畫布（不另外佔一筆歷史）
             if (this.paintFragment) {
-                const f = this.paintFragment;
-                this.paintCtx.drawImage(f.offscreen, 0, 0, f.offscreen.width, f.offscreen.height, f.x, f.y, f.w, f.h);
+                const f  = this.paintFragment;
+                const PS = this.paintScale;
+                this.paintCtx.drawImage(f.offscreen, 0, 0, f.offscreen.width, f.offscreen.height, f.x * PS, f.y * PS, f.w * PS, f.h * PS);
                 this.paintFragment = null;
                 this.paintFragDrag = null;
             }
@@ -3671,15 +3754,19 @@ class EasyNoteView extends ItemView {
             // 設定畫布尺寸（直接寫，不復原舊內容）
             this.manualWidth  = project.canvasWidth;
             this.manualHeight = project.canvasHeight;
-            this.canvas.width      = project.canvasWidth;
-            this.canvas.height     = project.canvasHeight;
-            this.paintCanvas.width  = project.canvasWidth;
-            this.paintCanvas.height = project.canvasHeight;
+            this.canvas.width       = project.canvasWidth;
+            this.canvas.height      = project.canvasHeight;
+            this.paintCanvas.width  = Math.max(1, Math.round(project.canvasWidth  * this.paintScale));
+            this.paintCanvas.height = Math.max(1, Math.round(project.canvasHeight * this.paintScale));
 
             // 載入繪畫層
             await new Promise<void>((resolve) => {
                 const img = new Image();
-                img.onload = () => { this.paintCtx.drawImage(img, 0, 0); resolve(); };
+                img.onload = () => {
+                    // 將儲存圖片（全尺寸）縮放至 paintCanvas（PS 尺寸）
+                    this.paintCtx.drawImage(img, 0, 0, this.paintCanvas.width, this.paintCanvas.height);
+                    resolve();
+                };
                 img.onerror = () => resolve();
                 img.src = project.paintLayer;
             });
@@ -4201,8 +4288,8 @@ class EasyNoteView extends ItemView {
             for (const ml of this.markdownLayers) {
                 this.drawMarkdownContent(tc, ml);
             }
-            // 繪畫層（上方）
-            tc.drawImage(this.paintCanvas, 0, 0);
+            // 繪畫層（上方）— paintCanvas 可能是 PS 縮放尺寸，拉伸回全畫布
+            tc.drawImage(this.paintCanvas, 0, 0, this.canvas.width, this.canvas.height);
             // 若有浮動 fragment，也合入存圖
             if (this.paintFragment) {
                 const f = this.paintFragment;
@@ -4845,6 +4932,22 @@ class EasyNoteSettingTab extends PluginSettingTab {
                         }
                     })
             );
+
+        // 筆觸解析度
+        new Setting(containerEl)
+            .setName('筆觸解析度')
+            .setDesc('降低可大幅提升大畫布（8K 等）效能，但筆觸邊緣在縮放後會略微模糊。更改後需重新開啟畫布才生效。')
+            .addDropdown((drop) => {
+                drop.addOption('1',    '1× 完整解析度（預設）');
+                drop.addOption('0.75', '0.75× 較佳效能');
+                drop.addOption('0.5',  '0.5× 高效能（推薦大畫布）');
+                drop.addOption('0.25', '0.25× 最高效能');
+                drop.setValue(String(this.plugin.settings.paintScale ?? 1));
+                drop.onChange(async (value) => {
+                    this.plugin.settings.paintScale = parseFloat(value);
+                    await this.plugin.saveSettings();
+                });
+            });
 
         // 儲存資料夾
         new Setting(containerEl)
