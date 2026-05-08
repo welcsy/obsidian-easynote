@@ -3762,6 +3762,8 @@ class EasyNoteView extends ItemView {
             }
             this.lastAutoSaveTime = new Date();
             this.refreshStatus();
+            const displayName = this.lastProjectName ?? EasyNoteView.AUTOSAVE_FILENAME;
+            new Notice(`暫存完成：${displayName}`, 2000);
         } catch (err) {
             console.error('[EasyNote] autosave error:', err);
         }
