@@ -313,6 +313,7 @@ class EasyNoteView extends ItemView {
     private pinchCenterX:   number | null = null;
     private pinchCenterY:   number | null = null;
     private gestureActive:  boolean = false; // 雙指手勢結束後，殘餘單指應被忽略
+    private _rafId:         number | null = null; // rAF throttle for render during drawing
 
     // 長按偵測（Android 觸控選單）
     private longPressTimer:    ReturnType<typeof setTimeout> | null = null;
@@ -1452,8 +1453,14 @@ class EasyNoteView extends ItemView {
                     this.render();
                 }
             } else if (this.drawing) {
-                this.paintStroke(this.prevX, this.prevY, mx, my);
-                this.prevX = mx; this.prevY = my;
+                // 使用 getCoalescedEvents 取回所有被合併的中間點，
+                // 避免大畫布在 Android 上因事件節流導致曲線退化成直線
+                const coalesced = (e as PointerEvent).getCoalescedEvents?.() ?? [e];
+                for (const ce of coalesced) {
+                    const { x: cpx, y: cpy } = this.toCanvasCoords(ce as PointerEvent);
+                    this.paintStroke(this.prevX, this.prevY, cpx, cpy);
+                    this.prevX = cpx; this.prevY = cpy;
+                }
             } else if (this.tool === 'paintselect') {
                 if (this.paintFragDrag && this.paintFragment) {
                     const ds    = this.paintFragDrag;
@@ -1745,11 +1752,23 @@ class EasyNoteView extends ItemView {
 
     // ── 合成渲染 ──────────────────────────────────────────────────────────────
 
-    private render(): void {
-        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-        // 1. 白底
-        this.ctx.fillStyle = '#ffffff';
-        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    private render(clip?: { x: number; y: number; w: number; h: number }): void {
+        if (clip) {
+            // 項目區域渲染：僅清除 + 重繪可見 viewport，其餘區域像素不動
+            const { x, y, w, h } = clip;
+            this.ctx.save();
+            this.ctx.beginPath();
+            this.ctx.rect(x, y, w, h);
+            this.ctx.clip();
+            this.ctx.clearRect(x, y, w, h);
+            this.ctx.fillStyle = '#ffffff';
+            this.ctx.fillRect(x, y, w, h);
+        } else {
+            this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+            // 1. 白底
+            this.ctx.fillStyle = '#ffffff';
+            this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+        }
         // 2. 圖片層（底部）
         for (const lay of this.imageLayers) {
             const rot = lay.rotation || 0;
@@ -1879,6 +1898,7 @@ class EasyNoteView extends ItemView {
             }
         }
         // 每次畫面更新後排程自動儲存（debounce）
+        if (clip) this.ctx.restore();
         this.scheduleAutosave();
     }
 
@@ -2538,46 +2558,68 @@ class EasyNoteView extends ItemView {
         return this.eraser ? '#000000' : this.colors[this.colorIdx];
     }
 
+    /** rAF-throttled render：繪畫期間每幀最多 composite 一次，避免大畫布卡頓 */
+    private scheduleRender(): void {
+        if (this._rafId !== null) return;
+        this._rafId = requestAnimationFrame(() => {
+            this._rafId = null;
+            if (this.drawing) {
+                // 繪畫中只重繪可見的 viewport 區域，避免 composite 整個大畫布
+                const sl = this.canvasWrapper.scrollLeft;
+                const st = this.canvasWrapper.scrollTop;
+                this.render({
+                    x: sl / this.zoom,
+                    y: st / this.zoom,
+                    w: this.canvasWrapper.clientWidth  / this.zoom,
+                    h: this.canvasWrapper.clientHeight / this.zoom,
+                });
+            } else {
+                this.render();
+            }
+        });
+    }
+
     private paintDot(x: number, y: number): void {
         this.paintCtx.save();
         if (this.eraser) {
             this.paintCtx.globalCompositeOperation = 'destination-out';
-            this.paintCtx.fillStyle = 'rgba(0,0,0,1)';
+            this.paintCtx.strokeStyle = 'rgba(0,0,0,1)';
         } else {
             this.paintCtx.globalCompositeOperation = 'source-over';
             this.paintCtx.globalAlpha = this.brushOpacity;
-            this.paintCtx.fillStyle = this.colors[this.colorIdx];
+            this.paintCtx.strokeStyle = this.colors[this.colorIdx];
         }
+        this.paintCtx.lineWidth  = this.brushSize;
+        this.paintCtx.lineCap    = 'round';
         this.paintCtx.beginPath();
-        this.paintCtx.arc(x, y, this.brushSize / 2, 0, Math.PI * 2);
-        this.paintCtx.fill();
+        // dot：moveTo 與 lineTo 同點，lineCap=round 會畫出圓點
+        this.paintCtx.moveTo(x, y);
+        this.paintCtx.lineTo(x, y);
+        this.paintCtx.stroke();
         this.paintCtx.restore();
-        this.render();
+        this.scheduleRender();
     }
 
     private paintStroke(x1: number, y1: number, x2: number, y2: number): void {
-        const dist  = Math.hypot(x2 - x1, y2 - y1);
-        const step  = Math.max(1, this.brushSize * 0.15);
-        const steps = Math.floor(dist / step);
         this.paintCtx.save();
         if (this.eraser) {
             this.paintCtx.globalCompositeOperation = 'destination-out';
-            this.paintCtx.fillStyle = 'rgba(0,0,0,1)';
+            this.paintCtx.strokeStyle = 'rgba(0,0,0,1)';
         } else {
             this.paintCtx.globalCompositeOperation = 'source-over';
             this.paintCtx.globalAlpha = this.brushOpacity;
-            this.paintCtx.fillStyle = this.colors[this.colorIdx];
+            this.paintCtx.strokeStyle = this.colors[this.colorIdx];
         }
-        for (let i = 0; i <= steps; i++) {
-            const t = steps > 0 ? i / steps : 0;
-            const x = x1 + (x2 - x1) * t;
-            const y = y1 + (y2 - y1) * t;
-            this.paintCtx.beginPath();
-            this.paintCtx.arc(x, y, this.brushSize / 2, 0, Math.PI * 2);
-            this.paintCtx.fill();
-        }
+        // lineCap/lineJoin=round 產生圓頭筆觸，單一 path stroke 取代多個 arc fill
+        this.paintCtx.lineWidth  = this.brushSize;
+        this.paintCtx.lineCap    = 'round';
+        this.paintCtx.lineJoin   = 'round';
+        this.paintCtx.beginPath();
+        this.paintCtx.moveTo(x1, y1);
+        this.paintCtx.lineTo(x2, y2);
+        this.paintCtx.stroke();
         this.paintCtx.restore();
-        this.render();
+        this.scheduleRender();
     }
 
     private clearCanvas(): void {
