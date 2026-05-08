@@ -1319,10 +1319,12 @@ class EasyNoteView extends ItemView {
                     if (td.handle === 'rotate') {
                         const angle = Math.atan2(my - td.centerY!, mx - td.centerX!);
                         let rot = td.startRotation! + (angle - td.startAngle!);
-                        if (e.shiftKey) { const snap = Math.PI / 12; rot = Math.round(rot / snap) * snap; }
+                        if (e.shiftKey || this.proportionalScale) { const snap = Math.PI / 12; rot = Math.round(rot / snap) * snap; }
                         tl.rotation = rot;
                         this.render(); return;
                     } else if (td.handle === 'move') {
+                        tl.x = td.startX + dx;
+                        tl.y = td.startY + dy;
                     } else if (td.handle === 'nw') {
                         const nw    = Math.max(minW, td.startW - dx);
                         const scale = nw / td.startW;
@@ -1358,18 +1360,19 @@ class EasyNoteView extends ItemView {
                     if (ds.handle === 'rotate') {
                         const angle = Math.atan2(my - ds.centerY!, mx - ds.centerX!);
                         let rot = ds.startRotation! + (angle - ds.startAngle!);
-                        if (e.shiftKey) { const snap = Math.PI / 12; rot = Math.round(rot / snap) * snap; }
+                        if (e.shiftKey || this.proportionalScale) { const snap = Math.PI / 12; rot = Math.round(rot / snap) * snap; }
                         lay.rotation = rot;
                         this.render(); return;
                     } else if (ds.handle === 'move') {
+                        lay.x = ds.startX + dx;
+                        lay.y = ds.startY + dy;
                     } else {
                         // 縮放：各角拖曳改變 x/y/w/h
                         const MIN = 20;
                         if (ds.handle === 'nw') {
                             let nw = Math.max(MIN, ds.startW - dx);
                             let nh = Math.max(MIN, ds.startH - dy);
-                            if (e.shiftKey) {
-                                // 以較大變化量為主，保持比例
+                            if (e.shiftKey || this.proportionalScale) {
                                 const scale = Math.max((ds.startW - dx) / ds.startW, (ds.startH - dy) / ds.startH);
                                 nw = Math.max(MIN, ds.startW * scale);
                                 nh = Math.max(MIN, nw / ratio);
@@ -1380,7 +1383,7 @@ class EasyNoteView extends ItemView {
                         } else if (ds.handle === 'ne') {
                             let nw = Math.max(MIN, ds.startW + dx);
                             let nh = Math.max(MIN, ds.startH - dy);
-                            if (e.shiftKey) {
+                            if (e.shiftKey || this.proportionalScale) {
                                 const scale = Math.max((ds.startW + dx) / ds.startW, (ds.startH - dy) / ds.startH);
                                 nw = Math.max(MIN, ds.startW * scale);
                                 nh = Math.max(MIN, nw / ratio);
@@ -1391,7 +1394,7 @@ class EasyNoteView extends ItemView {
                         } else if (ds.handle === 'sw') {
                             let nw = Math.max(MIN, ds.startW - dx);
                             let nh = Math.max(MIN, ds.startH + dy);
-                            if (e.shiftKey) {
+                            if (e.shiftKey || this.proportionalScale) {
                                 const scale = Math.max((ds.startW - dx) / ds.startW, (ds.startH + dy) / ds.startH);
                                 nw = Math.max(MIN, ds.startW * scale);
                                 nh = Math.max(MIN, nw / ratio);
@@ -1401,7 +1404,7 @@ class EasyNoteView extends ItemView {
                         } else { // se
                             let nw = Math.max(MIN, ds.startW + dx);
                             let nh = Math.max(MIN, ds.startH + dy);
-                            if (e.shiftKey) {
+                            if (e.shiftKey || this.proportionalScale) {
                                 const scale = Math.max((ds.startW + dx) / ds.startW, (ds.startH + dy) / ds.startH);
                                 nw = Math.max(MIN, ds.startW * scale);
                                 nh = Math.max(MIN, nw / ratio);
@@ -3161,7 +3164,7 @@ class EasyNoteView extends ItemView {
     private handleLongPress(mx: number, my: number, clientX: number, clientY: number): void {
         if (this.tool === 'paintselect') {
             if (this.paintFragment && this.pointInFrag(mx, my)) {
-                // 長按在 fragment 上 → 剪下 / 複製 / 等比例縮放
+                // 長按在 fragment 上 → 剪下 / 複製 / 等比例縮放 / 刪除
                 this.showContextMenu(clientX, clientY, [
                     {
                         label: '✂ 剪下',
@@ -3175,10 +3178,87 @@ class EasyNoteView extends ItemView {
                         label: this.proportionalScale ? '⤡ 等比例縮放 ✓' : '⤡ 等比例縮放',
                         action: () => { this.proportionalScale = !this.proportionalScale; },
                     },
+                    {
+                        label: '🗑 刪除',
+                        action: () => {
+                            this.pushHistory('刪除繪畫選取');
+                            this.paintFragment = null;
+                            this.paintFragDrag = null;
+                            this.render();
+                            this.refreshStatus();
+                        },
+                    },
                 ]);
                 return;
             }
         }
+
+        if (this.tool === 'select') {
+            // 長按在圖片圖層
+            if (this.selectedIdx >= 0 && this.pointInLayer(mx, my, this.imageLayers[this.selectedIdx])) {
+                this.showContextMenu(clientX, clientY, [
+                    { label: '✂ 剪下',   action: () => this.cutSelection() },
+                    { label: '⎘ 複製',   action: () => this.copySelection() },
+                    {
+                        label: this.proportionalScale ? '⤡ 等比例縮放 ✓' : '⤡ 等比例縮放',
+                        action: () => { this.proportionalScale = !this.proportionalScale; },
+                    },
+                    {
+                        label: '🗑 刪除',
+                        action: () => {
+                            this.pushHistory('刪除圖片圖層');
+                            this.imageLayers.splice(this.selectedIdx, 1);
+                            this.selectedIdx = -1;
+                            this.render(); this.refreshStatus();
+                        },
+                    },
+                ]);
+                return;
+            }
+            // 長按在文字圖層
+            if (this.selectedTextIdx >= 0 && this.pointInText(mx, my, this.textLayers[this.selectedTextIdx])) {
+                this.showContextMenu(clientX, clientY, [
+                    { label: '✂ 剪下',   action: () => this.cutSelection() },
+                    { label: '⎘ 複製',   action: () => this.copySelection() },
+                    {
+                        label: this.proportionalScale ? '⤡ 等比例縮放 ✓' : '⤡ 等比例縮放',
+                        action: () => { this.proportionalScale = !this.proportionalScale; },
+                    },
+                    {
+                        label: '🗑 刪除',
+                        action: () => {
+                            this.pushHistory('刪除文字圖層');
+                            this.textLayers.splice(this.selectedTextIdx, 1);
+                            this.selectedTextIdx = -1;
+                            this.render(); this.refreshStatus();
+                        },
+                    },
+                ]);
+                return;
+            }
+            // 長按在 Markdown 圖層
+            if (this.selectedMdIdx >= 0 && this.pointInMd(mx, my, this.markdownLayers[this.selectedMdIdx])) {
+                this.showContextMenu(clientX, clientY, [
+                    { label: '✂ 剪下',   action: () => this.cutSelection() },
+                    { label: '⎘ 複製',   action: () => this.copySelection() },
+                    {
+                        label: this.proportionalScale ? '⤡ 等比例縮放 ✓' : '⤡ 等比例縮放',
+                        action: () => { this.proportionalScale = !this.proportionalScale; },
+                    },
+                    {
+                        label: '🗑 刪除',
+                        action: () => {
+                            this.pushHistory('刪除 Markdown 圖層');
+                            this.markdownLayers.splice(this.selectedMdIdx, 1);
+                            this.selectedMdIdx = -1;
+                            this.render(); this.refreshStatus();
+                        },
+                    },
+                ]);
+                return;
+            }
+        }
+
         // 空白處長按 → 貼上（若有剪貼簿）
         if (this.clipboard) {
             this.showContextMenu(clientX, clientY, [
