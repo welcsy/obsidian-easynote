@@ -651,4 +651,7 @@
         border-top:  1px solid var(--background-modifier-border);
         padding-top: 4px;
     }
+    .easynote-canvas-actions-wrap .easynote-sep:first-of-type {
+        display: none;
+    }
 }

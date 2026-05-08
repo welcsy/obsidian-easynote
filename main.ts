@@ -755,8 +755,10 @@ class EasyNoteView extends ItemView {
         });
         row2.createEl('div', { cls: 'easynote-sep' });
 
-        // 畫布大小
-        const canvasSizeBtn = row2.createEl('button', {
+        const canvasActions = row2.createEl('div', { cls: 'easynote-canvas-actions-wrap' });
+
+        // 畫布大小（直立模式下與儲存/載入/匯出同列）
+        const canvasSizeBtn = canvasActions.createEl('button', {
             cls:   'easynote-btn',
             text:  '畫布大小',
             title: '調整畫布尺寸（現有內容保留）',
@@ -765,7 +767,7 @@ class EasyNoteView extends ItemView {
             new CanvasSizeModal(this.app, this.canvas.width, this.canvas.height,
                 (w, h) => this.setCanvasSize(w, h)).open();
         });
-        const canvasActions = row2.createEl('div', { cls: 'easynote-canvas-actions-wrap' });
+        canvasActions.createEl('div', { cls: 'easynote-sep' });
 
         // 儲存專案 (.enote)
         const saveProjectBtn = canvasActions.createEl('button', {
