@@ -311,6 +311,7 @@ class EasyNoteView extends ItemView {
     private pinchStartZoom: number | null = null;
     private pinchCenterX:   number | null = null;
     private pinchCenterY:   number | null = null;
+    private gestureActive:  boolean = false; // 雙指手勢結束後，殘餘單指應被忽略
 
     // 長按偵測（Android 觸控選單）
     private longPressTimer:    ReturnType<typeof setTimeout> | null = null;
@@ -828,8 +829,14 @@ class EasyNoteView extends ItemView {
             this.activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
             // 雙指觸控 → 切換到平移 / 縮放模式，不執行繪圖
+            // 三指以上：只記錄位置，其餘忽略（避免觸發繪圖 / 跳位）
+            if (this.activePointers.size >= 3) {
+                this.canvas.setPointerCapture(e.pointerId);
+                return;
+            }
             if (this.activePointers.size === 2) {
                 // 中止任何進行中的繪圖 / 拖曳
+                this.gestureActive = false; // 重新開始雙指手勢，清除殘餘旗標
                 this.drawing       = false;
                 this.dragState     = null;
                 this.textDragState = null;
@@ -1129,8 +1136,8 @@ class EasyNoteView extends ItemView {
                 this.activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
             }
 
-            // 雙指 pinch-to-zoom + 平移
-            if (this.activePointers.size === 2) {
+            // 雙指（含）以上：pinch-to-zoom + 平移
+            if (this.activePointers.size >= 2) {
                 const ptrs = [...this.activePointers.values()];
                 const cx = (ptrs[0].x + ptrs[1].x) / 2;
                 const cy = (ptrs[0].y + ptrs[1].y) / 2;
@@ -1146,10 +1153,13 @@ class EasyNoteView extends ItemView {
                     const pivotX = cx - wRect.left;
                     const pivotY = cy - wRect.top;
                     const ratio  = newZoom / this.zoom;
+                    // 在 applyZoom 前先快照 scroll，避免瀏覽器 resize 後自動修改 scrollLeft
+                    const prevSL = this.canvasWrapper.scrollLeft;
+                    const prevST = this.canvasWrapper.scrollTop;
                     this.zoom = newZoom;
                     this.applyZoom();
-                    this.canvasWrapper.scrollLeft = (this.canvasWrapper.scrollLeft + pivotX) * ratio - pivotX;
-                    this.canvasWrapper.scrollTop  = (this.canvasWrapper.scrollTop  + pivotY) * ratio - pivotY;
+                    this.canvasWrapper.scrollLeft = (prevSL + pivotX) * ratio - pivotX;
+                    this.canvasWrapper.scrollTop  = (prevST + pivotY) * ratio - pivotY;
                     this.refreshStatus();
                 }
                 // 雙指平移：增量方式，疊加在縮放後的 scroll 上，避免互相覆蓋
@@ -1167,6 +1177,8 @@ class EasyNoteView extends ItemView {
                 this.canvasWrapper.scrollTop  = this.panScrollTop  - (e.clientY - this.panStartY);
                 return;
             }
+            // 雙指手勢結束後殘餘單指 → 忽略，避免跳位或誤觸
+            if (this.gestureActive) return;
             if (!e.isPrimary) return;
 
             // 手指移動超出 slop → 取消長按
@@ -1490,9 +1502,25 @@ class EasyNoteView extends ItemView {
                 this.pinchStartZoom = null;
                 this.pinchCenterX   = null;
                 this.pinchCenterY   = null;
+                // 中止雙指平移，殘餘單指不應觸發單指平移（panScrollLeft 已過期）
+                this.isPanning = false;
+            }
+            // 三指→雙指：以剩餘兩指重新初始化 pinch 基準，避免跳動
+            if (this.activePointers.size === 2) {
+                const ptrs2 = [...this.activePointers.values()];
+                const dx2   = ptrs2[1].x - ptrs2[0].x;
+                const dy2   = ptrs2[1].y - ptrs2[0].y;
+                this.pinchStartDist = Math.hypot(dx2, dy2);
+                this.pinchStartZoom = this.zoom;
+                this.panStartX = (ptrs2[0].x + ptrs2[1].x) / 2;
+                this.panStartY = (ptrs2[0].y + ptrs2[1].y) / 2;
+            }
+            if (this.activePointers.size === 1) {
+                // 有殘餘手指 → 標記手勢仍活躍，pointermove 將忽略它
+                this.gestureActive = true;
             }
             if (this.activePointers.size === 0) {
-                this.isPanning = false;
+                this.gestureActive = false;
             }
             if (e.button === 1) {
                 this.isPanning = false;
@@ -1607,13 +1635,16 @@ class EasyNoteView extends ItemView {
                 : Math.max(MIN_ZOOM, this.zoom - ZOOM_STEP);
 
             // 以游標為縮放錨點，調整捲軸使游標下方畫布點保持不動
-            const wRect = this.canvasWrapper.getBoundingClientRect();
-            const cx    = e.clientX - wRect.left;
-            const cy    = e.clientY - wRect.top;
-            const ratio = this.zoom / oldZoom;
+            const wRect  = this.canvasWrapper.getBoundingClientRect();
+            const cx     = e.clientX - wRect.left;
+            const cy     = e.clientY - wRect.top;
+            const ratio  = this.zoom / oldZoom;
+            // 在 applyZoom 前先快照 scroll，避免瀏覽器 resize 後自動修改 scrollLeft
+            const prevSL = this.canvasWrapper.scrollLeft;
+            const prevST = this.canvasWrapper.scrollTop;
             this.applyZoom();
-            this.canvasWrapper.scrollLeft = (this.canvasWrapper.scrollLeft + cx) * ratio - cx;
-            this.canvasWrapper.scrollTop  = (this.canvasWrapper.scrollTop  + cy) * ratio - cy;
+            this.canvasWrapper.scrollLeft = (prevSL + cx) * ratio - cx;
+            this.canvasWrapper.scrollTop  = (prevST + cy) * ratio - cy;
             this.refreshStatus();
         }, { passive: false });
 
