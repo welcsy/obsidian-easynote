@@ -70,6 +70,7 @@ interface EasyNoteSettings {
     defaultCanvasWidth:  number;
     defaultCanvasHeight: number;
     paintScale:          number; // 1.0=全解析度 0.5=半解析度（效能模式）
+    timezone:            string; // IANA 時區，例如 'Asia/Taipei'
 }
 const DEFAULT_SETTINGS: EasyNoteSettings = {
     defaultColorIdx:  0,
@@ -81,6 +82,7 @@ const DEFAULT_SETTINGS: EasyNoteSettings = {
     defaultCanvasWidth:  1920,
     defaultCanvasHeight: 1080,
     paintScale:          1.0,
+    timezone:            'Asia/Taipei',
 };
 
 // ─── .enote 專案格式 ──────────────────────────────────────────────────────────
@@ -796,7 +798,7 @@ class EasyNoteView extends ItemView {
             title: '儲存可繼續編輯的 .enote 專案檔',
         });
         saveProjectBtn.addEventListener('click', () => {
-            const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+            const ts = this.localTimestamp();
             const defaultName = this.lastProjectName || `EasyNote-${ts}`;
             new ProjectNameModal(this.app, defaultName, (name) => this.saveProject(name)).open();
         });
@@ -818,7 +820,7 @@ class EasyNoteView extends ItemView {
             title: '將手繪圖儲存到 Vault',
         });
         saveBtn.addEventListener('click', () => {
-            const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+            const ts = this.localTimestamp();
             const defaultName = this.lastSaveName || `EasyNote-${ts}`;
             new SaveModal(this.app, defaultName, (name, fmt) => this.saveDrawing(name, fmt)).open();
         });
@@ -2586,6 +2588,21 @@ class EasyNoteView extends ItemView {
 
     private activeColor(): string {
         return this.eraser ? '#000000' : this.colors[this.colorIdx];
+    }
+
+    /** 依設定時區產生本地時間戳記字串，格式 YYYY-MM-DDTHH-MM-SS */
+    private localTimestamp(): string {
+        const tz = this.settings.timezone || 'Asia/Taipei';
+        const now = new Date();
+        // Intl.DateTimeFormat 輸出本地時間各欄位，再組成檔名安全字串
+        const fmt = new Intl.DateTimeFormat('sv-SE', {
+            timeZone: tz,
+            year: 'numeric', month: '2-digit', day: '2-digit',
+            hour: '2-digit', minute: '2-digit', second: '2-digit',
+            hour12: false,
+        });
+        // sv-SE locale 輸出格式接近 ISO：2026-05-09 14-30-00
+        return fmt.format(now).replace(' ', 'T').replace(/:/g, '-');
     }
 
     /** rAF-throttled render：繪畫期間每幀最多 composite 一次，避免大畫布卡頓 */
@@ -4945,6 +4962,26 @@ class EasyNoteSettingTab extends PluginSettingTab {
             });
 
         // 儲存資料夾
+        new Setting(containerEl)
+            .setName('時區')
+            .setDesc('儲存檔名使用的時區（IANA 格式，例如 Asia/Taipei、America/New_York、Europe/London）')
+            .addText((text) =>
+                text
+                    .setPlaceholder('Asia/Taipei')
+                    .setValue(this.plugin.settings.timezone ?? 'Asia/Taipei')
+                    .onChange(async (value) => {
+                        const tz = value.trim();
+                        // 簡單驗證：嘗試建立 Intl.DateTimeFormat，失敗則不儲存
+                        try {
+                            new Intl.DateTimeFormat('sv-SE', { timeZone: tz });
+                            this.plugin.settings.timezone = tz;
+                            await this.plugin.saveSettings();
+                        } catch {
+                            // 時區字串無效，不更新
+                        }
+                    })
+            );
+
         new Setting(containerEl)
             .setName('儲存資料夾')
             .setDesc('點擊「儲存 PNG」後，手繪圖存入 Vault 的哪個資料夾')
