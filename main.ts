@@ -71,6 +71,8 @@ interface EasyNoteSettings {
     defaultCanvasHeight: number;
     paintScale:          number; // 1.0=全解析度 0.5=半解析度（效能模式）
     timezone:            string; // IANA 時區，例如 'Asia/Taipei'
+    autoSyncEnabled:     boolean; // 定時 auto-sync 開關
+    autoSyncPeriodMs:    number;  // 定時 auto-sync 間隔（毫秒）
 }
 const DEFAULT_SETTINGS: EasyNoteSettings = {
     defaultColorIdx:  0,
@@ -83,6 +85,8 @@ const DEFAULT_SETTINGS: EasyNoteSettings = {
     defaultCanvasHeight: 1080,
     paintScale:          1.0,
     timezone:            'Asia/Taipei',
+    autoSyncEnabled:     false,
+    autoSyncPeriodMs:    60000,
 };
 
 // ─── .enote 專案格式 ──────────────────────────────────────────────────────────
@@ -212,6 +216,7 @@ interface HistoryEntry {
 // ─── 繪圖面板（ItemView）──────────────────────────────────────────────────────
 class EasyNoteView extends ItemView {
     private settings: EasyNoteSettings;
+    private saveSettings: () => Promise<void>;
 
     // 可見 canvas（顯示合成結果）
     private canvas!:        HTMLCanvasElement;
@@ -337,6 +342,8 @@ class EasyNoteView extends ItemView {
     private autoSaveTimer:   ReturnType<typeof setTimeout> | null = null;
     private lastAutoSaveTime: Date | null = null;
     private static readonly AUTOSAVE_DEBOUNCE_MS = 3000;   // 最後一次變更後 3 秒觸發
+    private _autoSyncTimer:  ReturnType<typeof setInterval> | null = null; // 定時 auto-sync
+    private autoSyncBtn!:    HTMLButtonElement;
     private static readonly AUTOSAVE_FILENAME    = 'EasyNote-autosave.enote';
 
     // 歷史記錄（Undo/Redo）
@@ -359,9 +366,10 @@ class EasyNoteView extends ItemView {
     private _vaultModifyRef:      import('obsidian').EventRef | null = null;
     private _suppressVaultModify  = false;
 
-    constructor(leaf: WorkspaceLeaf, settings: EasyNoteSettings) {
+    constructor(leaf: WorkspaceLeaf, settings: EasyNoteSettings, saveSettings: () => Promise<void>) {
         super(leaf);
-        this.settings = settings;
+        this.settings     = settings;
+        this.saveSettings = saveSettings;
     }
 
     getViewType():    string { return VIEW_TYPE;  }
@@ -377,6 +385,8 @@ class EasyNoteView extends ItemView {
         this.eraser             = false;
         this.tool               = 'pan';
         this.paintScale         = this.settings.paintScale ?? 1.0;
+        // 從設定啟動定時 auto-sync
+        if (this.settings.autoSyncEnabled) this.startAutoSync();
         this.imageLayers        = [];
         this.textLayers         = [];
         this.selectedIdx        = -1;
@@ -448,11 +458,12 @@ class EasyNoteView extends ItemView {
         if (this._mdEditing)   { this._mdEditing.el.remove();   this._mdEditing   = null; }
         if (this._vaultModifyRef) { this.app.vault.offref(this._vaultModifyRef); this._vaultModifyRef = null; }
         if (this.paintFragment) this.commitFragment();
-        // 取消 debounce
+        // 取消 debounce 和定時 auto-sync
         if (this.autoSaveTimer !== null) {
             clearTimeout(this.autoSaveTimer);
             this.autoSaveTimer = null;
         }
+        this.stopAutoSync();
         if ((this.settings.startupMode ?? 'new') === 'previous') {
             // 打開前一次模式：寫出最新暫存
             this.autoSaveDirect();
@@ -826,6 +837,24 @@ class EasyNoteView extends ItemView {
         });
 
         canvasActions.createEl('div', { cls: 'easynote-spacer' });
+
+        // 定時 auto-sync 開關按鈕
+        this.autoSyncBtn = canvasActions.createEl('button', {
+            cls:   'easynote-btn easynote-btn-icon',
+            title: '定時自動同步開關',
+        });
+        setIcon(this.autoSyncBtn, 'clock');
+        this.autoSyncBtn.addEventListener('click', () => {
+            this.settings.autoSyncEnabled = !this.settings.autoSyncEnabled;
+            this.saveSettings();
+            if (this.settings.autoSyncEnabled) {
+                this.startAutoSync();
+            } else {
+                this.stopAutoSync();
+            }
+            this.refreshStatus();
+        });
+
         this.statusLabel = canvasActions.createEl('span', { cls: 'easynote-status' });
     }
 
@@ -3031,6 +3060,14 @@ class EasyNoteView extends ItemView {
             this.activeLayerLabel.setAttribute('data-layer', this.tool === 'text' ? 'text' : this.tool === 'select' ? 'image' : 'paint');
         }
 
+        // auto-sync 按鈕外觀
+        if (this.autoSyncBtn) {
+            this.autoSyncBtn.toggleClass('easynote-btn-active', this.settings.autoSyncEnabled ?? false);
+            this.autoSyncBtn.title = this.settings.autoSyncEnabled
+                ? `定時同步：開啟（每 ${Math.round((this.settings.autoSyncPeriodMs ?? 60000) / 1000)} 秒）`
+                : '定時同步：關閉';
+        }
+
         const zoomStr = `縮放: ${Math.round(this.zoom * 100)}%`;
         const saveStr = this.lastAutoSaveTime
             ? `暫存: ${this.lastAutoSaveTime.toLocaleTimeString()}`
@@ -3648,6 +3685,23 @@ class EasyNoteView extends ItemView {
 
     // ── 自動儲存 ──────────────────────────────────────────────────────────────
     /** 每次 render() 後呼叫；debounce 3 秒後寫出暫存檔 */
+    /** 啟動定時 auto-sync（setInterval，依設定週期） */
+    private startAutoSync(): void {
+        this.stopAutoSync();
+        const ms = Math.max(5000, this.settings.autoSyncPeriodMs ?? 60000);
+        this._autoSyncTimer = setInterval(() => {
+            this.autoSaveDirect();
+        }, ms);
+    }
+
+    /** 停止定時 auto-sync */
+    private stopAutoSync(): void {
+        if (this._autoSyncTimer !== null) {
+            clearInterval(this._autoSyncTimer);
+            this._autoSyncTimer = null;
+        }
+    }
+
     private scheduleAutosave(): void {
         if (this.autoSaveTimer !== null) clearTimeout(this.autoSaveTimer);
         this.autoSaveTimer = setTimeout(() => {
@@ -4765,7 +4819,7 @@ export default class EasyNotePlugin extends Plugin {
         await this.loadSettings();
 
         // 註冊自訂 View
-        this.registerView(VIEW_TYPE, (leaf) => new EasyNoteView(leaf, this.settings));
+        this.registerView(VIEW_TYPE, (leaf) => new EasyNoteView(leaf, this.settings, () => this.saveSettings()));
 
         // 左側 Ribbon 圖示
         this.addRibbonIcon('pencil', '開啟 EasyNote 手繪筆記', () => {
@@ -4982,6 +5036,34 @@ class EasyNoteSettingTab extends PluginSettingTab {
                             await this.plugin.saveSettings();
                         } catch {
                             // 時區字串無效，不更新
+                        }
+                    })
+            );
+
+        // 定時 auto-sync
+        new Setting(containerEl)
+            .setName('定時自動同步')
+            .setDesc('開啟後，畫布會依照設定的間隔定時自動儲存（工具列按鈕也可即時切換）')
+            .addToggle((toggle) => {
+                toggle.setValue(this.plugin.settings.autoSyncEnabled ?? false);
+                toggle.onChange(async (value) => {
+                    this.plugin.settings.autoSyncEnabled = value;
+                    await this.plugin.saveSettings();
+                });
+            });
+
+        new Setting(containerEl)
+            .setName('自動同步間隔（秒）')
+            .setDesc('定時自動同步的間隔秒數，最短 5 秒，預設 60 秒')
+            .addText((text) =>
+                text
+                    .setPlaceholder('60')
+                    .setValue(String(Math.round((this.plugin.settings.autoSyncPeriodMs ?? 60000) / 1000)))
+                    .onChange(async (value) => {
+                        const sec = parseInt(value);
+                        if (sec >= 5) {
+                            this.plugin.settings.autoSyncPeriodMs = sec * 1000;
+                            await this.plugin.saveSettings();
                         }
                     })
             );
