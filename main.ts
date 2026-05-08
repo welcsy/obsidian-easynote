@@ -82,9 +82,9 @@ const DEFAULT_SETTINGS: EasyNoteSettings = {
 };
 
 // ─── .enote 專案格式 ──────────────────────────────────────────────────────────
-interface ENoteImageLayer    { src: string; x: number; y: number; w: number; h: number; }
-interface ENoteTextLayer     { text: string; x: number; y: number; fontSize: number; color: string; linkedNotePath?: string; }
-interface ENoteMarkdownLayer { text: string; x: number; y: number; fontSize: number; color: string; width: number; linkedNotePath?: string; }
+interface ENoteImageLayer    { src: string; x: number; y: number; w: number; h: number; rotation?: number; }
+interface ENoteTextLayer     { text: string; x: number; y: number; fontSize: number; color: string; linkedNotePath?: string; rotation?: number; }
+interface ENoteMarkdownLayer { text: string; x: number; y: number; fontSize: number; color: string; width: number; linkedNotePath?: string; rotation?: number; }
 interface ENote {
     version:        number;
     canvasWidth:    number;
@@ -101,38 +101,48 @@ interface ImageLayer {
     y: number;
     w: number;
     h: number;
+    rotation?: number;
 }
 
-type HandleType = 'move' | 'nw' | 'ne' | 'sw' | 'se';
+type HandleType = 'move' | 'nw' | 'ne' | 'sw' | 'se' | 'rotate';
 
 interface DragState {
-    handle:     HandleType;
-    startMX:    number;
-    startMY:    number;
-    startX:     number;
-    startY:     number;
-    startW:     number;
-    startH:     number;
-}
-
-interface TextLayer {
-    text:           string;
-    x:              number;
-    y:              number;
-    fontSize:       number;
-    color:          string;
-    linkedNotePath?: string;  // 連結到 Vault .md 筆記的路徑（開啟時自動更新內容）
-}
-
-interface TextDragState {
     handle:        HandleType;
     startMX:       number;
     startMY:       number;
     startX:        number;
     startY:        number;
-    startFontSize: number;
     startW:        number;
     startH:        number;
+    startRotation?: number;  // 旋轉用
+    centerX?:       number;
+    centerY?:       number;
+    startAngle?:    number;
+}
+
+interface TextLayer {
+    text:            string;
+    x:               number;
+    y:               number;
+    fontSize:        number;
+    color:           string;
+    linkedNotePath?: string;  // 連結到 Vault .md 筆記的路徑（開啟時自動更新內容）
+    rotation?:       number;
+}
+
+interface TextDragState {
+    handle:         HandleType;
+    startMX:        number;
+    startMY:        number;
+    startX:         number;
+    startY:         number;
+    startFontSize:  number;
+    startW:         number;
+    startH:         number;
+    startRotation?: number;
+    centerX?:       number;
+    centerY?:       number;
+    startAngle?:    number;
 }
 
 /** 一小塊被「擷起」的繪畫內容，可經導動、縮放後再合并回繪畫層 */
@@ -142,6 +152,7 @@ interface PaintFragment {
     y:  number;
     w:  number;                    // 目前寬度（可被縮放）
     h:  number;
+    rotation?: number;
 }
 
 /** 行內 Markdown 片段（用於 MarkdownLayer 渲染） */
@@ -164,27 +175,32 @@ interface MarkdownLayer {
     color:           string;
     width:           number;           // 最大內容寬度（自動換行）
     linkedNotePath?: string;           // 連結 Vault .md 路徑
+    rotation?:       number;
     _cachedH?:       number;           // 執行期快取高度，不序列化
 }
 
 interface MdDragState {
-    handle:        HandleType;
-    startMX:       number;
-    startMY:       number;
-    startX:        number;
-    startY:        number;
-    startFontSize: number;
-    startWidth:    number;
-    startH:        number;
+    handle:         HandleType;
+    startMX:        number;
+    startMY:        number;
+    startX:         number;
+    startY:         number;
+    startFontSize:  number;
+    startWidth:     number;
+    startH:         number;
+    startRotation?: number;
+    centerX?:       number;
+    centerY?:       number;
+    startAngle?:    number;
 }
 
 /** 畫布歷史快照（用於 Undo/Redo） */
 interface HistoryEntry {
     label:          string;
     paintData:      ImageData;
-    imageLayers:    { img: HTMLImageElement; x: number; y: number; w: number; h: number }[];
-    markdownLayers: { text: string; x: number; y: number; fontSize: number; color: string; width: number; linkedNotePath?: string }[];
-    textLayers:     { text: string; x: number; y: number; fontSize: number; color: string; linkedNotePath?: string }[];
+    imageLayers:    { img: HTMLImageElement; x: number; y: number; w: number; h: number; rotation?: number }[];
+    markdownLayers: { text: string; x: number; y: number; fontSize: number; color: string; width: number; linkedNotePath?: string; rotation?: number }[];
+    textLayers:     { text: string; x: number; y: number; fontSize: number; color: string; linkedNotePath?: string; rotation?: number }[];
     canvasW:        number;
     canvasH:        number;
 }
@@ -844,11 +860,24 @@ class EasyNoteView extends ItemView {
                     // 有 fragment：檢查控點 / 內部變鑑 / 外部 confirm
                     const h = this.hitFragHandle(mx, my);
                     if (h) {
-                        this.paintFragDrag = {
-                            handle: h, startMX: mx, startMY: my,
-                            startX: this.paintFragment.x, startY: this.paintFragment.y,
-                            startW: this.paintFragment.w, startH: this.paintFragment.h,
-                        };
+                        const frag = this.paintFragment;
+                        const rot  = frag.rotation || 0;
+                        if (h === 'rotate') {
+                            const cx = frag.x + frag.w / 2, cy = frag.y + frag.h / 2;
+                            this.paintFragDrag = {
+                                handle: 'rotate', startMX: mx, startMY: my,
+                                startX: frag.x, startY: frag.y,
+                                startW: frag.w, startH: frag.h,
+                                startRotation: rot, centerX: cx, centerY: cy,
+                                startAngle: Math.atan2(my - cy, mx - cx),
+                            };
+                        } else {
+                            this.paintFragDrag = {
+                                handle: h, startMX: mx, startMY: my,
+                                startX: frag.x, startY: frag.y,
+                                startW: frag.w, startH: frag.h,
+                            };
+                        }
                     } else if (this.pointInFrag(mx, my)) {
                         this.paintFragDrag = {
                             handle: 'move', startMX: mx, startMY: my,
@@ -944,14 +973,27 @@ class EasyNoteView extends ItemView {
                 if (this.selectedMdIdx >= 0 && this.selectedMdIdx < this.markdownLayers.length) {
                     const h = this.hitMdHandle(mx, my, this.markdownLayers[this.selectedMdIdx]);
                     if (h) {
-                        const ml = this.markdownLayers[this.selectedMdIdx];
-                        const b  = this.mdBBox(ml);
-                        this.pushHistory('縮放 Markdown 圖層');
-                        this.mdDragState = {
-                            handle: h, startMX: mx, startMY: my,
-                            startX: ml.x, startY: ml.y,
-                            startFontSize: ml.fontSize, startWidth: ml.width, startH: b.h,
-                        };
+                        const ml  = this.markdownLayers[this.selectedMdIdx];
+                        const b   = this.mdBBox(ml);
+                        const rot = ml.rotation || 0;
+                        if (h === 'rotate') {
+                            this.pushHistory('旋轉 Markdown 圖層');
+                            const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+                            this.mdDragState = {
+                                handle: 'rotate', startMX: mx, startMY: my,
+                                startX: ml.x, startY: ml.y,
+                                startFontSize: ml.fontSize, startWidth: ml.width, startH: b.h,
+                                startRotation: rot, centerX: cx, centerY: cy,
+                                startAngle: Math.atan2(my - cy, mx - cx),
+                            };
+                        } else {
+                            this.pushHistory('縮放 Markdown 圖層');
+                            this.mdDragState = {
+                                handle: h, startMX: mx, startMY: my,
+                                startX: ml.x, startY: ml.y,
+                                startFontSize: ml.fontSize, startWidth: ml.width, startH: b.h,
+                            };
+                        }
                         return;
                     }
                 }
@@ -995,9 +1037,21 @@ class EasyNoteView extends ItemView {
                     const h = this.hitHandle(mx, my, this.imageLayers[this.selectedIdx]);
                     if (h) {
                         const lay = this.imageLayers[this.selectedIdx];
-                        this.pushHistory('縮放圖片圖層');  // 縮放圖片層前先存快照
-                        this.dragState = { handle: h, startMX: mx, startMY: my,
-                            startX: lay.x, startY: lay.y, startW: lay.w, startH: lay.h };
+                        const rot = lay.rotation || 0;
+                        if (h === 'rotate') {
+                            this.pushHistory('旋轉圖片圖層');
+                            const cx = lay.x + lay.w / 2, cy = lay.y + lay.h / 2;
+                            this.dragState = {
+                                handle: 'rotate', startMX: mx, startMY: my,
+                                startX: lay.x, startY: lay.y, startW: lay.w, startH: lay.h,
+                                startRotation: rot, centerX: cx, centerY: cy,
+                                startAngle: Math.atan2(my - cy, mx - cx),
+                            };
+                        } else {
+                            this.pushHistory('縮放圖片圖層');  // 縮放圖片層前先存快照
+                            this.dragState = { handle: h, startMX: mx, startMY: my,
+                                startX: lay.x, startY: lay.y, startW: lay.w, startH: lay.h };
+                        }
                         return;
                     }
                 }
@@ -1178,7 +1232,14 @@ class EasyNoteView extends ItemView {
                     const dx  = mx - md.startMX;
                     const MIN_FONT  = 8;
                     const MIN_WIDTH = 40;
-                    if (md.handle === 'move') {
+                    if (md.handle === 'rotate') {
+                        const angle = Math.atan2(my - md.centerY!, mx - md.centerX!);
+                        let rot = md.startRotation! + (angle - md.startAngle!);
+                        if (e.shiftKey) { const snap = Math.PI / 12; rot = Math.round(rot / snap) * snap; }
+                        ml.rotation = rot;
+                        ml._cachedH = undefined;
+                        this.render(); return;
+                    } else if (md.handle === 'move') {
                         ml.x = md.startX + dx;
                         ml.y = md.startY + (my - md.startMY);
                     } else if (md.handle === 'se') {
@@ -1220,9 +1281,13 @@ class EasyNoteView extends ItemView {
                     const MIN_FONT = 8;
                     const minW     = td.startW * (MIN_FONT / td.startFontSize);
 
-                    if (td.handle === 'move') {
-                        tl.x = td.startX + dx;
-                        tl.y = td.startY + dy;
+                    if (td.handle === 'rotate') {
+                        const angle = Math.atan2(my - td.centerY!, mx - td.centerX!);
+                        let rot = td.startRotation! + (angle - td.startAngle!);
+                        if (e.shiftKey) { const snap = Math.PI / 12; rot = Math.round(rot / snap) * snap; }
+                        tl.rotation = rot;
+                        this.render(); return;
+                    } else if (td.handle === 'move') {
                     } else if (td.handle === 'nw') {
                         const nw    = Math.max(minW, td.startW - dx);
                         const scale = nw / td.startW;
@@ -1255,9 +1320,13 @@ class EasyNoteView extends ItemView {
                     const lay   = this.imageLayers[this.selectedIdx];
                     const ratio = ds.startW / ds.startH;  // 原始長寬比
 
-                    if (ds.handle === 'move') {
-                        lay.x = ds.startX + dx;
-                        lay.y = ds.startY + dy;
+                    if (ds.handle === 'rotate') {
+                        const angle = Math.atan2(my - ds.centerY!, mx - ds.centerX!);
+                        let rot = ds.startRotation! + (angle - ds.startAngle!);
+                        if (e.shiftKey) { const snap = Math.PI / 12; rot = Math.round(rot / snap) * snap; }
+                        lay.rotation = rot;
+                        this.render(); return;
+                    } else if (ds.handle === 'move') {
                     } else {
                         // 縮放：各角拖曳改變 x/y/w/h
                         const MIN = 20;
@@ -1318,7 +1387,12 @@ class EasyNoteView extends ItemView {
                     const frag  = this.paintFragment;
                     const ratio = ds.startW / ds.startH;
                     const MIN   = 10;
-                    if (ds.handle === 'move') {
+                    if (ds.handle === 'rotate') {
+                        const angle = Math.atan2(my - ds.centerY!, mx - ds.centerX!);
+                        let rot = ds.startRotation! + (angle - ds.startAngle!);
+                        if (e.shiftKey || this.proportionalScale) { const snap = Math.PI / 12; rot = Math.round(rot / snap) * snap; }
+                        frag.rotation = rot;
+                    } else if (ds.handle === 'move') {
                         frag.x = ds.startX + dx;
                         frag.y = ds.startY + dy;
                     } else if (ds.handle === 'nw') {
@@ -1584,15 +1658,41 @@ class EasyNoteView extends ItemView {
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
         // 2. 圖片層（底部）
         for (const lay of this.imageLayers) {
-            this.ctx.drawImage(lay.img, lay.x, lay.y, lay.w, lay.h);
+            const rot = lay.rotation || 0;
+            this.ctx.save();
+            const cx = lay.x + lay.w / 2, cy = lay.y + lay.h / 2;
+            this.ctx.translate(cx, cy);
+            this.ctx.rotate(rot);
+            this.ctx.drawImage(lay.img, -lay.w / 2, -lay.h / 2, lay.w, lay.h);
+            this.ctx.restore();
         }
         // 2b. Markdown 圖層（圖片層上方）
         for (const ml of this.markdownLayers) {
-            ml._cachedH = this.drawMarkdownContent(this.ctx, ml);
+            const rot = ml.rotation || 0;
+            if (rot !== 0) {
+                const b  = this.mdBBox(ml);
+                const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+                this.ctx.save();
+                this.ctx.translate(cx, cy);
+                this.ctx.rotate(rot);
+                this.ctx.translate(-cx, -cy);
+                ml._cachedH = this.drawMarkdownContent(this.ctx, ml);
+                this.ctx.restore();
+            } else {
+                ml._cachedH = this.drawMarkdownContent(this.ctx, ml);
+            }
         }
         // 3. 文字層（圖片上方，繪畫層下方）
         for (const tl of this.textLayers) {
             this.ctx.save();
+            const rot = tl.rotation || 0;
+            if (rot !== 0) {
+                const b  = this.textBBox(tl);
+                const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+                this.ctx.translate(cx, cy);
+                this.ctx.rotate(rot);
+                this.ctx.translate(-cx, -cy);
+            }
             this.ctx.font         = `${tl.fontSize}px sans-serif`;
             this.ctx.textBaseline = 'top';
             const lines = tl.text.split('\n');
@@ -1625,8 +1725,14 @@ class EasyNoteView extends ItemView {
         this.ctx.drawImage(this.paintCanvas, 0, 0);
         // 4a. 繪畫選取 fragment（繪畫層上方）
         if (this.paintFragment) {
-            const f = this.paintFragment;
-            this.ctx.drawImage(f.offscreen, 0, 0, f.offscreen.width, f.offscreen.height, f.x, f.y, f.w, f.h);
+            const f   = this.paintFragment;
+            const rot = f.rotation || 0;
+            const cx  = f.x + f.w / 2, cy = f.y + f.h / 2;
+            this.ctx.save();
+            this.ctx.translate(cx, cy);
+            this.ctx.rotate(rot);
+            this.ctx.drawImage(f.offscreen, 0, 0, f.offscreen.width, f.offscreen.height, -f.w / 2, -f.h / 2, f.w, f.h);
+            this.ctx.restore();
         }
         // 5. 選取框 & 控點
         if (this.tool === 'select') {
@@ -1682,50 +1788,121 @@ class EasyNoteView extends ItemView {
         this.scheduleAutosave();
     }
 
+    private cornerPositions(lay: ImageLayer): [number, number][] {
+        return this.rotatedCorners(lay.x, lay.y, lay.w, lay.h, lay.rotation || 0);
+    }
+
+    // ── 旋轉 helpers ──────────────────────────────────────────────────────────
+    private static readonly ROTATE_HANDLE_OFFSET = 28; // px above top edge
+
+    /** 旋轉控點（圓形）在世界座標中的位置 */
+    private rotateHandleWorldPos(x: number, y: number, w: number, h: number, rot: number): [number, number] {
+        const cx = x + w / 2, cy = y + h / 2;
+        const offset = h / 2 + EasyNoteView.ROTATE_HANDLE_OFFSET;
+        const c = Math.cos(rot), s = Math.sin(rot);
+        // local: (0, -offset) 旋轉到世界空間
+        return [cx + 0 * c - (-offset) * s, cy + 0 * s + (-offset) * c];
+    }
+
+    /** 回傳旋轉後的四個角落世界座標（順序：nw, ne, sw, se） */
+    private rotatedCorners(x: number, y: number, w: number, h: number, rot: number): [number, number][] {
+        const cx = x + w / 2, cy = y + h / 2;
+        const hw = w / 2, hh = h / 2;
+        const c = Math.cos(rot), s = Math.sin(rot);
+        return ([ [-hw, -hh], [hw, -hh], [-hw, hh], [hw, hh] ] as [number, number][]).map(
+            ([lx, ly]) => [cx + lx * c - ly * s, cy + lx * s + ly * c] as [number, number]);
+    }
+
+    /** 點擊測試：考慮旋轉的矩形 */
+    private pointInRotatedRect(mx: number, my: number, x: number, y: number, w: number, h: number, rot: number): boolean {
+        const cx = x + w / 2, cy = y + h / 2;
+        const c = Math.cos(-rot), s = Math.sin(-rot);
+        const dx = mx - cx, dy = my - cy;
+        const lx = dx * c - dy * s, ly = dx * s + dy * c;
+        return Math.abs(lx) <= w / 2 && Math.abs(ly) <= h / 2;
+    }
+
+    /** 繪製旋轉控點（圓形 + 連接線） */
+    private drawRotateHandle(topCx: number, topCy: number, rhx: number, rhy: number, color: string): void {
+        // 連線
+        this.ctx.save();
+        this.ctx.strokeStyle = color;
+        this.ctx.lineWidth   = 1.5;
+        this.ctx.setLineDash([3, 2]);
+        this.ctx.beginPath();
+        this.ctx.moveTo(topCx, topCy);
+        this.ctx.lineTo(rhx, rhy);
+        this.ctx.stroke();
+        // 圓形控點
+        this.ctx.setLineDash([]);
+        this.ctx.fillStyle   = '#ffffff';
+        this.ctx.strokeStyle = color;
+        this.ctx.lineWidth   = 1.5;
+        this.ctx.beginPath();
+        this.ctx.arc(rhx, rhy, HANDLE_SIZE * 1.275, 0, Math.PI * 2);
+        this.ctx.fill();
+        this.ctx.stroke();
+        // 旋轉箭頭指示符
+        this.ctx.strokeStyle = color;
+        this.ctx.lineWidth   = 1.2;
+        this.ctx.beginPath();
+        this.ctx.arc(rhx, rhy, HANDLE_SIZE * 0.63, 0.3, Math.PI * 1.7);
+        this.ctx.stroke();
+        this.ctx.restore();
+    }
+
     private drawSelectionHandles(lay: ImageLayer): void {
-        const { x, y, w, h } = lay;
-        // 虛線框
+        const rot     = lay.rotation || 0;
+        const corners = this.rotatedCorners(lay.x, lay.y, lay.w, lay.h, rot);
+        const [cnw, cne, csw, cse] = corners; // nw, ne, sw, se
+        // 虛線框（四點連線）
         this.ctx.save();
         this.ctx.strokeStyle = '#0066ff';
         this.ctx.lineWidth   = 1.5;
         this.ctx.setLineDash([5, 3]);
-        this.ctx.strokeRect(x, y, w, h);
+        this.ctx.beginPath();
+        this.ctx.moveTo(cnw[0], cnw[1]);
+        this.ctx.lineTo(cne[0], cne[1]);
+        this.ctx.lineTo(cse[0], cse[1]);
+        this.ctx.lineTo(csw[0], csw[1]);
+        this.ctx.closePath();
+        this.ctx.stroke();
         this.ctx.restore();
         // 四個角控點
-        for (const [cx, cy] of this.cornerPositions(lay)) {
+        const hs = HANDLE_SIZE / 2;
+        for (const [cx, cy] of corners) {
+            this.ctx.save();
+            this.ctx.setLineDash([]);
             this.ctx.fillStyle   = '#ffffff';
             this.ctx.strokeStyle = '#0066ff';
             this.ctx.lineWidth   = 1.5;
-            this.ctx.fillRect(cx - HANDLE_SIZE / 2, cy - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
-            this.ctx.strokeRect(cx - HANDLE_SIZE / 2, cy - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
+            this.ctx.fillRect(cx - hs, cy - hs, HANDLE_SIZE, HANDLE_SIZE);
+            this.ctx.strokeRect(cx - hs, cy - hs, HANDLE_SIZE, HANDLE_SIZE);
+            this.ctx.restore();
         }
-    }
-
-    private cornerPositions(lay: ImageLayer): [number, number][] {
-        return [
-            [lay.x,         lay.y        ],
-            [lay.x + lay.w, lay.y        ],
-            [lay.x,         lay.y + lay.h],
-            [lay.x + lay.w, lay.y + lay.h],
-        ];
+        // 旋轉控點
+        const [rhx, rhy] = this.rotateHandleWorldPos(lay.x, lay.y, lay.w, lay.h, rot);
+        const topCx = (cnw[0] + cne[0]) / 2, topCy = (cnw[1] + cne[1]) / 2;
+        this.drawRotateHandle(topCx, topCy, rhx, rhy, '#0066ff');
     }
 
     private hitHandle(mx: number, my: number, lay: ImageLayer): HandleType | null {
-        const corners: [HandleType, number, number][] = [
-            ['nw', lay.x,         lay.y        ],
-            ['ne', lay.x + lay.w, lay.y        ],
-            ['sw', lay.x,         lay.y + lay.h],
-            ['se', lay.x + lay.w, lay.y + lay.h],
-        ];
+        const rot     = lay.rotation || 0;
+        const corners = this.rotatedCorners(lay.x, lay.y, lay.w, lay.h, rot);
+        const names: HandleType[] = ['nw', 'ne', 'sw', 'se'];
+        // 旋轉控點優先
+        const [rhx, rhy] = this.rotateHandleWorldPos(lay.x, lay.y, lay.w, lay.h, rot);
+        if (Math.hypot(mx - rhx, my - rhy) <= HANDLE_SIZE * 2.4) return 'rotate';
         const hs = HANDLE_SIZE;
-        for (const [type, cx, cy] of corners) {
-            if (mx >= cx - hs && mx <= cx + hs && my >= cy - hs && my <= cy + hs) return type;
+        for (let i = 0; i < 4; i++) {
+            const [cx, cy] = corners[i];
+            if (mx >= cx - hs && mx <= cx + hs && my >= cy - hs && my <= cy + hs) return names[i];
         }
         return null;
     }
 
     private pointInLayer(mx: number, my: number, lay: ImageLayer): boolean {
-        return mx >= lay.x && mx <= lay.x + lay.w && my >= lay.y && my <= lay.y + lay.h;
+        return this.pointInRotatedRect(mx, my, lay.x, lay.y, lay.w, lay.h, lay.rotation || 0);
     }
 
     /** 回傳文字圖層的近似包圍矩形 */
@@ -1739,43 +1916,55 @@ class EasyNoteView extends ItemView {
 
     private pointInText(mx: number, my: number, tl: TextLayer): boolean {
         const b = this.textBBox(tl);
-        return mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h;
+        return this.pointInRotatedRect(mx, my, b.x, b.y, b.w, b.h, tl.rotation || 0);
     }
 
     private drawTextSelectionBox(tl: TextLayer): void {
-        const b = this.textBBox(tl);
-        const linked = !!tl.linkedNotePath;
+        const b       = this.textBBox(tl);
+        const rot     = tl.rotation || 0;
+        const linked  = !!tl.linkedNotePath;
+        const color   = linked ? '#22aa44' : '#0066ff';
+        const corners = this.rotatedCorners(b.x - 2, b.y - 2, b.w + 4, b.h + 4, rot);
+        const [cnw, cne, csw, cse] = corners;
         this.ctx.save();
-        this.ctx.strokeStyle = linked ? '#22aa44' : '#0066ff';
+        this.ctx.strokeStyle = color;
         this.ctx.lineWidth   = 1.5;
         this.ctx.setLineDash([5, 3]);
-        this.ctx.strokeRect(b.x - 2, b.y - 2, b.w + 4, b.h + 4);
+        this.ctx.beginPath();
+        this.ctx.moveTo(cnw[0], cnw[1]);
+        this.ctx.lineTo(cne[0], cne[1]);
+        this.ctx.lineTo(cse[0], cse[1]);
+        this.ctx.lineTo(csw[0], csw[1]);
+        this.ctx.closePath();
+        this.ctx.stroke();
         this.ctx.restore();
-        // 四個角控點
         const hs = HANDLE_SIZE / 2;
-        for (const [cx, cy] of [[b.x, b.y], [b.x + b.w, b.y], [b.x, b.y + b.h], [b.x + b.w, b.y + b.h]] as [number, number][]) {
+        for (const [cx, cy] of corners) {
             this.ctx.save();
             this.ctx.setLineDash([]);
             this.ctx.fillStyle   = '#ffffff';
-            this.ctx.strokeStyle = linked ? '#22aa44' : '#0066ff';
+            this.ctx.strokeStyle = color;
             this.ctx.lineWidth   = 1.5;
             this.ctx.fillRect(cx - hs, cy - hs, HANDLE_SIZE, HANDLE_SIZE);
             this.ctx.strokeRect(cx - hs, cy - hs, HANDLE_SIZE, HANDLE_SIZE);
             this.ctx.restore();
         }
+        const [rhx, rhy] = this.rotateHandleWorldPos(b.x - 2, b.y - 2, b.w + 4, b.h + 4, rot);
+        const topCx = (cnw[0] + cne[0]) / 2, topCy = (cnw[1] + cne[1]) / 2;
+        this.drawRotateHandle(topCx, topCy, rhx, rhy, color);
     }
 
     private hitTextHandle(mx: number, my: number, tl: TextLayer): HandleType | null {
-        const b  = this.textBBox(tl);
+        const b       = this.textBBox(tl);
+        const rot     = tl.rotation || 0;
+        const corners = this.rotatedCorners(b.x, b.y, b.w, b.h, rot);
+        const names: HandleType[] = ['nw', 'ne', 'sw', 'se'];
+        const [rhx, rhy] = this.rotateHandleWorldPos(b.x, b.y, b.w, b.h, rot);
+        if (Math.hypot(mx - rhx, my - rhy) <= HANDLE_SIZE * 2.4) return 'rotate';
         const hs = HANDLE_SIZE;
-        const corners: [HandleType, number, number][] = [
-            ['nw', b.x,       b.y      ],
-            ['ne', b.x + b.w, b.y      ],
-            ['sw', b.x,       b.y + b.h],
-            ['se', b.x + b.w, b.y + b.h],
-        ];
-        for (const [type, cx, cy] of corners) {
-            if (mx >= cx - hs && mx <= cx + hs && my >= cy - hs && my <= cy + hs) return type;
+        for (let i = 0; i < 4; i++) {
+            const [cx, cy] = corners[i];
+            if (mx >= cx - hs && mx <= cx + hs && my >= cy - hs && my <= cy + hs) return names[i];
         }
         return null;
     }
@@ -1809,8 +1998,18 @@ class EasyNoteView extends ItemView {
     private commitFragment(): void {
         if (!this.paintFragment) return;
         this.pushHistory('合併繪畫區塊');                 // 合併繪畫區塊前先存快照
-        const f = this.paintFragment;
-        this.paintCtx.drawImage(f.offscreen, 0, 0, f.offscreen.width, f.offscreen.height, f.x, f.y, f.w, f.h);
+        const f   = this.paintFragment;
+        const rot = f.rotation || 0;
+        if (rot !== 0) {
+            const cx = f.x + f.w / 2, cy = f.y + f.h / 2;
+            this.paintCtx.save();
+            this.paintCtx.translate(cx, cy);
+            this.paintCtx.rotate(rot);
+            this.paintCtx.drawImage(f.offscreen, 0, 0, f.offscreen.width, f.offscreen.height, -f.w / 2, -f.h / 2, f.w, f.h);
+            this.paintCtx.restore();
+        } else {
+            this.paintCtx.drawImage(f.offscreen, 0, 0, f.offscreen.width, f.offscreen.height, f.x, f.y, f.w, f.h);
+        }
         this.paintFragment    = null;
         this.paintFragDrag    = null;
         this.proportionalScale = false;   // 離開 fragment 時重設等比例鎖定
@@ -1825,15 +2024,16 @@ class EasyNoteView extends ItemView {
     private hitFragHandle(mx: number, my: number): HandleType | null {
         if (!this.paintFragment) return null;
         const { x, y, w, h } = this.paintFragment;
+        const rot     = this.paintFragment.rotation || 0;
+        const corners = this.rotatedCorners(x, y, w, h, rot);
+        const names: HandleType[] = ['nw', 'ne', 'sw', 'se'];
+        // 旋轉控點優先
+        const [rhx, rhy] = this.rotateHandleWorldPos(x, y, w, h, rot);
+        if (Math.hypot(mx - rhx, my - rhy) <= HANDLE_SIZE * 2.4) return 'rotate';
         const hs = HANDLE_SIZE;
-        const corners: [HandleType, number, number][] = [
-            ['nw', x,     y    ],
-            ['ne', x + w, y    ],
-            ['sw', x,     y + h],
-            ['se', x + w, y + h],
-        ];
-        for (const [type, cx, cy] of corners) {
-            if (mx >= cx - hs && mx <= cx + hs && my >= cy - hs && my <= cy + hs) return type;
+        for (let i = 0; i < 4; i++) {
+            const [cx, cy] = corners[i];
+            if (mx >= cx - hs && mx <= cx + hs && my >= cy - hs && my <= cy + hs) return names[i];
         }
         return null;
     }
@@ -1841,19 +2041,28 @@ class EasyNoteView extends ItemView {
     private pointInFrag(mx: number, my: number): boolean {
         if (!this.paintFragment) return false;
         const { x, y, w, h } = this.paintFragment;
-        return mx >= x && mx <= x + w && my >= y && my <= y + h;
+        return this.pointInRotatedRect(mx, my, x, y, w, h, this.paintFragment.rotation || 0);
     }
 
     private drawFragmentHandles(frag: PaintFragment): void {
         const { x, y, w, h } = frag;
+        const rot     = frag.rotation || 0;
+        const corners = this.rotatedCorners(x, y, w, h, rot);
+        const [cnw, cne, csw, cse] = corners;
         this.ctx.save();
         this.ctx.strokeStyle = '#ff6600';
         this.ctx.lineWidth   = 1.5;
         this.ctx.setLineDash([5, 3]);
-        this.ctx.strokeRect(x, y, w, h);
+        this.ctx.beginPath();
+        this.ctx.moveTo(cnw[0], cnw[1]);
+        this.ctx.lineTo(cne[0], cne[1]);
+        this.ctx.lineTo(cse[0], cse[1]);
+        this.ctx.lineTo(csw[0], csw[1]);
+        this.ctx.closePath();
+        this.ctx.stroke();
         this.ctx.restore();
         const hs = HANDLE_SIZE / 2;
-        for (const [cx, cy] of [[x, y], [x + w, y], [x, y + h], [x + w, y + h]] as [number, number][]) {
+        for (const [cx, cy] of corners) {
             this.ctx.save();
             this.ctx.setLineDash([]);
             this.ctx.fillStyle   = '#ffffff';
@@ -1863,6 +2072,9 @@ class EasyNoteView extends ItemView {
             this.ctx.strokeRect(cx - hs, cy - hs, HANDLE_SIZE, HANDLE_SIZE);
             this.ctx.restore();
         }
+        const [rhx, rhy] = this.rotateHandleWorldPos(x, y, w, h, rot);
+        const topCx = (cnw[0] + cne[0]) / 2, topCy = (cnw[1] + cne[1]) / 2;
+        this.drawRotateHandle(topCx, topCy, rhx, rhy, '#ff6600');
     }
 
     // ── 多圖層選取 helpers ────────────────────────────────────────────────────
@@ -2804,10 +3016,10 @@ class EasyNoteView extends ItemView {
         const entry: HistoryEntry = {
             label,
             paintData:      this.paintCtx.getImageData(0, 0, this.paintCanvas.width, this.paintCanvas.height),
-            imageLayers:    this.imageLayers.map(l => ({ img: l.img, x: l.x, y: l.y, w: l.w, h: l.h })),
+            imageLayers:    this.imageLayers.map(l => ({ img: l.img, x: l.x, y: l.y, w: l.w, h: l.h, rotation: l.rotation })),
             markdownLayers: this.markdownLayers.map(ml => ({
                 text: ml.text, x: ml.x, y: ml.y, fontSize: ml.fontSize,
-                color: ml.color, width: ml.width, linkedNotePath: ml.linkedNotePath,
+                color: ml.color, width: ml.width, linkedNotePath: ml.linkedNotePath, rotation: ml.rotation,
             })),
             textLayers:     this.textLayers.map(tl => ({ ...tl })),
             canvasW:        this.canvas.width,
@@ -3127,7 +3339,7 @@ class EasyNoteView extends ItemView {
                 tmp.width  = lay.img.naturalWidth  || lay.w;
                 tmp.height = lay.img.naturalHeight || lay.h;
                 tmp.getContext('2d')!.drawImage(lay.img, 0, 0);
-                return { src: tmp.toDataURL('image/png'), x: lay.x, y: lay.y, w: lay.w, h: lay.h };
+                return { src: tmp.toDataURL('image/png'), x: lay.x, y: lay.y, w: lay.w, h: lay.h, rotation: lay.rotation };
             });
             const project: ENote = {
                 version:        1,
@@ -3176,7 +3388,7 @@ class EasyNoteView extends ItemView {
                 tmp.width   = lay.img.naturalWidth  || lay.w;
                 tmp.height  = lay.img.naturalHeight || lay.h;
                 tmp.getContext('2d')!.drawImage(lay.img, 0, 0);
-                return { src: tmp.toDataURL('image/png'), x: lay.x, y: lay.y, w: lay.w, h: lay.h };
+                return { src: tmp.toDataURL('image/png'), x: lay.x, y: lay.y, w: lay.w, h: lay.h, rotation: lay.rotation };
             });
 
             const project: ENote = {
@@ -3246,7 +3458,7 @@ class EasyNoteView extends ItemView {
                 await new Promise<void>((resolve) => {
                     const img = new Image();
                     img.onload = () => {
-                        this.imageLayers.push({ img, x: lay.x, y: lay.y, w: lay.w, h: lay.h });
+                        this.imageLayers.push({ img, x: lay.x, y: lay.y, w: lay.w, h: lay.h, rotation: lay.rotation || 0 });
                         resolve();
                     };
                     img.onerror = () => resolve();
@@ -3652,44 +3864,57 @@ class EasyNoteView extends ItemView {
 
     private pointInMd(mx: number, my: number, ml: MarkdownLayer): boolean {
         const b = this.mdBBox(ml);
-        return mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h;
+        return this.pointInRotatedRect(mx, my, b.x, b.y, b.w, b.h, ml.rotation || 0);
     }
 
     private hitMdHandle(mx: number, my: number, ml: MarkdownLayer): HandleType | null {
-        const b  = this.mdBBox(ml);
+        const b       = this.mdBBox(ml);
+        const rot     = ml.rotation || 0;
+        const corners = this.rotatedCorners(b.x, b.y, b.w, b.h, rot);
+        const names: HandleType[] = ['nw', 'ne', 'sw', 'se'];
+        const [rhx, rhy] = this.rotateHandleWorldPos(b.x, b.y, b.w, b.h, rot);
+        if (Math.hypot(mx - rhx, my - rhy) <= HANDLE_SIZE * 2.4) return 'rotate';
         const hs = HANDLE_SIZE;
-        const corners: [HandleType, number, number][] = [
-            ['nw', b.x,       b.y      ],
-            ['ne', b.x + b.w, b.y      ],
-            ['sw', b.x,       b.y + b.h],
-            ['se', b.x + b.w, b.y + b.h],
-        ];
-        for (const [type, cx, cy] of corners) {
-            if (mx >= cx - hs && mx <= cx + hs && my >= cy - hs && my <= cy + hs) return type;
+        for (let i = 0; i < 4; i++) {
+            const [cx, cy] = corners[i];
+            if (mx >= cx - hs && mx <= cx + hs && my >= cy - hs && my <= cy + hs) return names[i];
         }
         return null;
     }
 
     private drawMdSelectionBox(ml: MarkdownLayer): void {
-        const b      = this.mdBBox(ml);
-        const linked = !!ml.linkedNotePath;
+        const b       = this.mdBBox(ml);
+        const rot     = ml.rotation || 0;
+        const linked  = !!ml.linkedNotePath;
+        const color   = linked ? '#22aa44' : '#9966cc';
+        const corners = this.rotatedCorners(b.x - 2, b.y - 2, b.w + 4, b.h + 4, rot);
+        const [cnw, cne, csw, cse] = corners;
         this.ctx.save();
-        this.ctx.strokeStyle = linked ? '#22aa44' : '#9966cc';
+        this.ctx.strokeStyle = color;
         this.ctx.lineWidth   = 1.5;
         this.ctx.setLineDash([5, 3]);
-        this.ctx.strokeRect(b.x - 2, b.y - 2, b.w + 4, b.h + 4);
+        this.ctx.beginPath();
+        this.ctx.moveTo(cnw[0], cnw[1]);
+        this.ctx.lineTo(cne[0], cne[1]);
+        this.ctx.lineTo(cse[0], cse[1]);
+        this.ctx.lineTo(csw[0], csw[1]);
+        this.ctx.closePath();
+        this.ctx.stroke();
         this.ctx.restore();
         const hs = HANDLE_SIZE / 2;
-        for (const [cx, cy] of [[b.x, b.y], [b.x + b.w, b.y], [b.x, b.y + b.h], [b.x + b.w, b.y + b.h]] as [number, number][]) {
+        for (const [cx, cy] of corners) {
             this.ctx.save();
             this.ctx.setLineDash([]);
             this.ctx.fillStyle   = '#ffffff';
-            this.ctx.strokeStyle = linked ? '#22aa44' : '#9966cc';
+            this.ctx.strokeStyle = color;
             this.ctx.lineWidth   = 1.5;
             this.ctx.fillRect(cx - hs, cy - hs, HANDLE_SIZE, HANDLE_SIZE);
             this.ctx.strokeRect(cx - hs, cy - hs, HANDLE_SIZE, HANDLE_SIZE);
             this.ctx.restore();
         }
+        const [rhx, rhy] = this.rotateHandleWorldPos(b.x - 2, b.y - 2, b.w + 4, b.h + 4, rot);
+        const topCx = (cnw[0] + cne[0]) / 2, topCy = (cnw[1] + cne[1]) / 2;
+        this.drawRotateHandle(topCx, topCy, rhx, rhy, color);
     }
 
     // ── 儲存至 Vault ──────────────────────────────────────────────────────────
