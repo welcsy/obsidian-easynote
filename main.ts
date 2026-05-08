@@ -4446,12 +4446,7 @@ class CanvasSizeModal extends Modal {
             const w = Math.max(100, Math.min(16000, parseInt(this.wInput.value) || this.currentW));
             const h = Math.max(100, Math.min(16000, parseInt(this.hInput.value) || this.currentH));
             this.onApply(w, h);
-            // 更新「目前尺寸」提示，不關閉 Modal
-            this.currentW = w;
-            this.currentH = h;
-            this.wInput.value = String(w);
-            this.hInput.value = String(h);
-            this.hintEl.textContent = `目前：${w} × ${h}　（現有內容會保留在左上角）`;
+            this.close();
         });
         const closeBtn = btnRow.createEl('button', { cls: 'easynote-btn', text: '關閉' });
         closeBtn.addEventListener('click', () => this.close());
