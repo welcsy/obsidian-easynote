@@ -296,6 +296,14 @@ class EasyNoteView extends ItemView {
     private pinchCenterX:   number | null = null;
     private pinchCenterY:   number | null = null;
 
+    // 長按偵測（Android 觸控選單）
+    private longPressTimer:    ReturnType<typeof setTimeout> | null = null;
+    private longPressStartX:   number = 0;
+    private longPressStartY:   number = 0;
+    private proportionalScale: boolean = false;   // 等比例縮放鎖定（觸控用，等同 Shift）
+    private static readonly LONG_PRESS_MS    = 500;   // 長按觸發時間（ms）
+    private static readonly LONG_PRESS_SLOP  = 10;    // 允許移動距離（px）
+
     // 自動儲存
     private autoSaveTimer:   ReturnType<typeof setTimeout> | null = null;
     private lastAutoSaveTime: Date | null = null;
@@ -808,6 +816,19 @@ class EasyNoteView extends ItemView {
             if (e.button !== 0) return;
             if (!e.isPrimary) return;
 
+            // 觸控長按偵測（僅 touch / pen）
+            if (e.pointerType !== 'mouse') {
+                if (this.longPressTimer) clearTimeout(this.longPressTimer);
+                this.longPressStartX = e.clientX;
+                this.longPressStartY = e.clientY;
+                this.longPressTimer  = setTimeout(() => {
+                    this.longPressTimer = null;
+                    const { x: lmx, y: lmy } = this.toCanvasCoords(
+                        { clientX: this.longPressStartX, clientY: this.longPressStartY } as PointerEvent);
+                    this.handleLongPress(lmx, lmy, this.longPressStartX, this.longPressStartY);
+                }, EasyNoteView.LONG_PRESS_MS);
+            }
+
             this.canvas.setPointerCapture(e.pointerId);
             const { x: mx, y: my } = this.toCanvasCoords(e);
 
@@ -1053,6 +1074,17 @@ class EasyNoteView extends ItemView {
                 return;
             }
             if (!e.isPrimary) return;
+
+            // 手指移動超出 slop → 取消長按
+            if (this.longPressTimer) {
+                const dx = e.clientX - this.longPressStartX;
+                const dy = e.clientY - this.longPressStartY;
+                if (Math.hypot(dx, dy) > EasyNoteView.LONG_PRESS_SLOP) {
+                    clearTimeout(this.longPressTimer);
+                    this.longPressTimer = null;
+                }
+            }
+
             const { x: mx, y: my } = this.toCanvasCoords(e);
 
             if (this.tool === 'select') {
@@ -1292,22 +1324,22 @@ class EasyNoteView extends ItemView {
                     } else if (ds.handle === 'nw') {
                         let nw = Math.max(MIN, ds.startW - dx);
                         let nh = Math.max(MIN, ds.startH - dy);
-                        if (e.shiftKey) { const sc = Math.max((ds.startW-dx)/ds.startW,(ds.startH-dy)/ds.startH); nw=Math.max(MIN,ds.startW*sc); nh=nw/ratio; }
+                        if (e.shiftKey || this.proportionalScale) { const sc = Math.max((ds.startW-dx)/ds.startW,(ds.startH-dy)/ds.startH); nw=Math.max(MIN,ds.startW*sc); nh=nw/ratio; }
                         frag.x = ds.startX + (ds.startW - nw); frag.y = ds.startY + (ds.startH - nh); frag.w = nw; frag.h = nh;
                     } else if (ds.handle === 'ne') {
                         let nw = Math.max(MIN, ds.startW + dx);
                         let nh = Math.max(MIN, ds.startH - dy);
-                        if (e.shiftKey) { const sc = Math.max((ds.startW+dx)/ds.startW,(ds.startH-dy)/ds.startH); nw=Math.max(MIN,ds.startW*sc); nh=nw/ratio; }
+                        if (e.shiftKey || this.proportionalScale) { const sc = Math.max((ds.startW+dx)/ds.startW,(ds.startH-dy)/ds.startH); nw=Math.max(MIN,ds.startW*sc); nh=nw/ratio; }
                         frag.w = nw; frag.y = ds.startY + (ds.startH - nh); frag.h = nh;
                     } else if (ds.handle === 'sw') {
                         let nw = Math.max(MIN, ds.startW - dx);
                         let nh = Math.max(MIN, ds.startH + dy);
-                        if (e.shiftKey) { const sc = Math.max((ds.startW-dx)/ds.startW,(ds.startH+dy)/ds.startH); nw=Math.max(MIN,ds.startW*sc); nh=nw/ratio; }
+                        if (e.shiftKey || this.proportionalScale) { const sc = Math.max((ds.startW-dx)/ds.startW,(ds.startH+dy)/ds.startH); nw=Math.max(MIN,ds.startW*sc); nh=nw/ratio; }
                         frag.x = ds.startX + (ds.startW - nw); frag.w = nw; frag.h = nh;
                     } else { // se
                         let nw = Math.max(MIN, ds.startW + dx);
                         let nh = Math.max(MIN, ds.startH + dy);
-                        if (e.shiftKey) { const sc = Math.max((ds.startW+dx)/ds.startW,(ds.startH+dy)/ds.startH); nw=Math.max(MIN,ds.startW*sc); nh=nw/ratio; }
+                        if (e.shiftKey || this.proportionalScale) { const sc = Math.max((ds.startW+dx)/ds.startW,(ds.startH+dy)/ds.startH); nw=Math.max(MIN,ds.startW*sc); nh=nw/ratio; }
                         frag.w = nw; frag.h = nh;
                     }
                     this.render();
@@ -1330,6 +1362,11 @@ class EasyNoteView extends ItemView {
 
         this.canvas.addEventListener('pointerup', (e) => {
             this.activePointers.delete(e.pointerId);
+            // 手指抬起 → 取消長按計時器
+            if (this.longPressTimer) {
+                clearTimeout(this.longPressTimer);
+                this.longPressTimer = null;
+            }
             // 雙指結束 → 重設 pinch 狀態
             if (this.activePointers.size < 2) {
                 this.pinchStartDist = null;
@@ -1403,6 +1440,7 @@ class EasyNoteView extends ItemView {
         });
         this.canvas.addEventListener('pointercancel', (e) => {
             this.activePointers.delete(e.pointerId);
+            if (this.longPressTimer) { clearTimeout(this.longPressTimer); this.longPressTimer = null; }
             if (this.activePointers.size === 0) {
                 this.isPanning     = false;
                 this.pinchStartDist = null;
@@ -1773,8 +1811,9 @@ class EasyNoteView extends ItemView {
         this.pushHistory('合併繪畫區塊');                 // 合併繪畫區塊前先存快照
         const f = this.paintFragment;
         this.paintCtx.drawImage(f.offscreen, 0, 0, f.offscreen.width, f.offscreen.height, f.x, f.y, f.w, f.h);
-        this.paintFragment = null;
-        this.paintFragDrag = null;
+        this.paintFragment    = null;
+        this.paintFragDrag    = null;
+        this.proportionalScale = false;   // 離開 fragment 時重設等比例鎖定
         this.render();
     }
 
@@ -2821,6 +2860,90 @@ class EasyNoteView extends ItemView {
         this.refreshUndoRedo();
     }
 
+    // ── 長按選單（Android 觸控）────────────────────────────────────────────
+    /** 在 (clientX, clientY) 顯示浮動選單，items: [{ label, action }] */
+    private showContextMenu(clientX: number, clientY: number,
+                            items: { label: string; action: () => void }[]): void {
+        // 移除舊選單
+        document.querySelectorAll('.easynote-ctx-menu').forEach(el => el.remove());
+
+        const menu = document.createElement('div');
+        menu.className = 'easynote-ctx-menu';
+        menu.style.cssText = [
+            'position:fixed',
+            `left:${Math.min(clientX, window.innerWidth - 160)}px`,
+            `top:${Math.min(clientY + 4, window.innerHeight - items.length * 44 - 8)}px`,
+            'z-index:9999',
+            'background:var(--background-primary)',
+            'border:1px solid var(--background-modifier-border)',
+            'border-radius:8px',
+            'box-shadow:0 4px 16px rgba(0,0,0,0.25)',
+            'overflow:hidden',
+            'min-width:140px',
+        ].join(';');
+
+        for (const item of items) {
+            const btn = menu.createEl('button');
+            btn.textContent = item.label;
+            btn.style.cssText = [
+                'display:block', 'width:100%', 'padding:10px 16px',
+                'text-align:left', 'background:none', 'border:none',
+                'color:var(--text-normal)', 'font-size:15px', 'cursor:pointer',
+            ].join(';');
+            btn.addEventListener('pointerdown', (ev) => {
+                ev.stopPropagation();
+                menu.remove();
+                item.action();
+            });
+        }
+
+        document.body.appendChild(menu);
+
+        // 點擊選單外關閉
+        const close = (ev: PointerEvent) => {
+            if (!menu.contains(ev.target as Node)) {
+                menu.remove();
+                document.removeEventListener('pointerdown', close, true);
+            }
+        };
+        // 稍微延遲，避免觸發當次 pointerdown 立即關閉
+        setTimeout(() => document.addEventListener('pointerdown', close, true), 50);
+    }
+
+    /** 長按觸發：根據目前工具與狀態決定選單內容 */
+    private handleLongPress(mx: number, my: number, clientX: number, clientY: number): void {
+        if (this.tool === 'paintselect') {
+            if (this.paintFragment && this.pointInFrag(mx, my)) {
+                // 長按在 fragment 上 → 剪下 / 複製 / 等比例縮放
+                this.showContextMenu(clientX, clientY, [
+                    {
+                        label: '✂ 剪下',
+                        action: () => this.cutSelection(),
+                    },
+                    {
+                        label: '⎘ 複製',
+                        action: () => this.copySelection(),
+                    },
+                    {
+                        label: this.proportionalScale ? '⤡ 等比例縮放 ✓' : '⤡ 等比例縮放',
+                        action: () => { this.proportionalScale = !this.proportionalScale; },
+                    },
+                ]);
+                return;
+            }
+        }
+        // 空白處長按 → 貼上（若有剪貼簿）
+        if (this.clipboard) {
+            this.showContextMenu(clientX, clientY, [
+                {
+                    label: '⎗ 貼上',
+                    action: () => this.pasteClipboard(),
+                },
+            ]);
+        }
+    }
+
+    /** 等比例縮放對話框：輸入百分比後縮放 paintFragment */
     // ── 複製 / 剪下 / 貼上（內部剪貼簿）─────────────────────────────────────
     private copySelection(): void {
         if (this.tool === 'select') {
