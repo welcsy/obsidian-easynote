@@ -370,6 +370,7 @@ class EasyNoteView extends ItemView {
     private lastAutoSaveTime: Date | null = null;
     private static readonly AUTOSAVE_DEBOUNCE_MS = 3000;   // 最後一次變更後 3 秒觸發
     private _autoSyncTimer:          ReturnType<typeof setInterval> | null = null; // 定時 auto-sync
+    private _syncInProgress           = false; // 同步中，暫停 auto-save
     private autoSyncBtn!:             HTMLButtonElement;
     private _autoPeriodicSaveTimer:   ReturnType<typeof setInterval> | null = null; // 定時 auto-save
     private autoPeriodicSaveBtn!:     HTMLButtonElement;
@@ -3783,10 +3784,20 @@ class EasyNoteView extends ItemView {
                     console.error('[EasyNote] Drive download error:', err);
                 }
             }
-            // 從本地 Vault 載入
+            // 從本地 Vault 載入（設旗標避免觸發 auto-save 迴圈）
             const file = this.app.vault.getAbstractFileByPath(filepath);
             if (file instanceof TFile) {
-                this.loadProject(file);
+                this._syncInProgress = true;
+                try {
+                    await this.loadProject(file);
+                } finally {
+                    this._syncInProgress = false;
+                    // 清除載入過程中排程的 debounce timer
+                    if (this.autoSaveTimer !== null) {
+                        clearTimeout(this.autoSaveTimer);
+                        this.autoSaveTimer = null;
+                    }
+                }
             }
         }, ms);
     }
@@ -3817,6 +3828,7 @@ class EasyNoteView extends ItemView {
     }
 
     private scheduleAutosave(): void {
+        if (this._syncInProgress) return;      // 同步載入中，不觸發暫存
         if (this.autoSaveTimer !== null) clearTimeout(this.autoSaveTimer);
         this.autoSaveTimer = setTimeout(() => {
             this.autoSaveTimer = null;
@@ -3825,6 +3837,7 @@ class EasyNoteView extends ItemView {
     }
 
     private async autoSaveDirect(): Promise<void> {
+        if (this._syncInProgress) return;      // 同步載入中，不觸發暫存
         try {
             const folder = normalizePath(this.settings.saveFolder);
             if (!(await this.app.vault.adapter.exists(folder))) {
