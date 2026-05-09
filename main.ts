@@ -5067,6 +5067,12 @@ export default class EasyNotePlugin extends Plugin {
         const token = await this.getValidAccessToken();
         if (!token) { console.warn('[EasyNote] Drive upload skipped: no token'); return; }
         const folderId = await this.ensureGoogleDriveFolder(token);
+
+        // 確保 content 是獨立的 ArrayBuffer（避免 slice 問題）
+        const contentBuf = content.buffer.slice(
+            content.byteOffset, content.byteOffset + content.byteLength
+        ) as ArrayBuffer;
+
         // 查詢是否已存在同名檔案
         const q = encodeURIComponent(`name='${filename}' and '${folderId}' in parents and trashed=false`);
         const searchResp = await requestUrl({
@@ -5074,51 +5080,38 @@ export default class EasyNotePlugin extends Plugin {
             method: 'GET',
             headers: { Authorization: `Bearer ${token}` },
         });
-        const existing = searchResp.json.files ?? [];
-        if (existing.length > 0) {
-            // 更新現有檔案：先啟動 resumable upload，再 PUT 內容
-            const fileId = existing[0].id;
-            const initResp = await requestUrl({
-                url:    `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=resumable`,
-                method: 'PATCH',
-                headers: {
-                    Authorization:            `Bearer ${token}`,
-                    'Content-Type':           'application/json',
-                    'X-Upload-Content-Type':  'application/octet-stream',
-                    'X-Upload-Content-Length': String(content.length),
-                },
-                body:  JSON.stringify({}),
-                throw: false,
-            });
-            const uploadUrl = initResp.headers['location'];
-            if (!uploadUrl) throw new Error('[EasyNote] No resumable upload URL returned');
-            await requestUrl({
-                url:    uploadUrl,
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/octet-stream' },
-                body:   content.buffer as ArrayBuffer,
-            });
-        } else {
-            // 建立新檔案：multipart upload（metadata + content）
-            const boundary = `EasyNoteBoundary${Date.now()}`;
-            const metaJson = JSON.stringify({ name: filename, parents: [folderId] });
-            const header   = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metaJson}\r\n--${boundary}\r\nContent-Type: application/octet-stream\r\n\r\n`;
-            const footer   = `\r\n--${boundary}--`;
-            const headerBytes = new TextEncoder().encode(header);
-            const footerBytes = new TextEncoder().encode(footer);
-            const body = new Uint8Array(headerBytes.length + content.length + footerBytes.length);
-            body.set(headerBytes, 0);
-            body.set(content,     headerBytes.length);
-            body.set(footerBytes, headerBytes.length + content.length);
-            await requestUrl({
-                url:    'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',
-                method: 'POST',
-                headers: {
-                    Authorization:  `Bearer ${token}`,
-                    'Content-Type': `multipart/related; boundary=${boundary}`,
-                },
-                body: body.buffer as ArrayBuffer,
-            });
+        const existing = (searchResp.json.files ?? []) as { id: string }[];
+
+        // 統一用 multipart upload（create 或 update 皆單次請求）
+        const boundary  = `EasyNoteBoundary${Date.now()}`;
+        const meta      = existing.length > 0
+            ? JSON.stringify({ name: filename })                          // 更新不需 parents
+            : JSON.stringify({ name: filename, parents: [folderId] });    // 建立需要 parents
+        const headerStr = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${meta}\r\n--${boundary}\r\nContent-Type: application/octet-stream\r\n\r\n`;
+        const footerStr = `\r\n--${boundary}--`;
+        const hBytes    = new TextEncoder().encode(headerStr);
+        const fBytes    = new TextEncoder().encode(footerStr);
+        const cBytes    = new Uint8Array(contentBuf);
+        const body      = new Uint8Array(hBytes.length + cBytes.length + fBytes.length);
+        body.set(hBytes, 0);
+        body.set(cBytes, hBytes.length);
+        body.set(fBytes, hBytes.length + cBytes.length);
+
+        const method  = existing.length > 0 ? 'PATCH' : 'POST';
+        const fileId  = existing.length > 0 ? `/${existing[0].id}` : '';
+        const resp = await requestUrl({
+            url:    `https://www.googleapis.com/upload/drive/v3/files${fileId}?uploadType=multipart`,
+            method,
+            headers: {
+                Authorization:  `Bearer ${token}`,
+                'Content-Type': `multipart/related; boundary=${boundary}`,
+            },
+            body:  body.buffer as ArrayBuffer,
+            throw: false,
+        });
+        if (resp.status < 200 || resp.status >= 300) {
+            console.error('[EasyNote] Drive upload error:', resp.status, resp.json);
+            throw new Error(`Drive upload failed: HTTP ${resp.status}`);
         }
     }
 
@@ -5147,20 +5140,18 @@ export default class EasyNotePlugin extends Plugin {
 
     /** 開啟瀏覽器引導使用者完成 Google OAuth2 授權，並儲存 Refresh Token */
     async startGoogleOAuthFlow(): Promise<void> {
-        if (!Platform.isDesktopApp) {
-            new Notice('Google Drive 授權僅支援桌面版 Obsidian');
-            return;
+        if (Platform.isDesktopApp) {
+            await this._oauthDesktop();
+        } else {
+            await this._oauthMobile();
         }
+    }
+
+    /** 桌面版：啟動本機 HTTP server 自動接收授權碼 */
+    private async _oauthDesktop(): Promise<void> {
         const port        = GOOGLE_OAUTH_PORT;
         const redirectUri = GOOGLE_REDIRECT_URI;
-        const authUrl = 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
-            client_id:     GOOGLE_CLIENT_ID,
-            redirect_uri:  redirectUri,
-            response_type: 'code',
-            scope:         'https://www.googleapis.com/auth/drive.file',
-            access_type:   'offline',
-            prompt:        'consent',
-        }).toString();
+        const authUrl     = this._buildAuthUrl(redirectUri);
 
         const code = await new Promise<string | null>((resolve) => {
             // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -5183,15 +5174,39 @@ export default class EasyNotePlugin extends Plugin {
                 }
                 resolve(null);
             });
-            // 2 分鐘後超時
             setTimeout(() => { try { server.close(); } catch { /* ignore */ } resolve(null); }, 120000);
         });
 
-        if (!code) {
-            new Notice('Google 授權失敗或超時，請重試');
-            return;
-        }
-        // 用授權碼換取 refresh token
+        if (!code) { new Notice('Google 授權失敗或超時，請重試'); return; }
+        await this._exchangeCode(code, redirectUri);
+    }
+
+    /** 行動版（Android / iOS）：手動貼上跳轉網址取得授權碼 */
+    private async _oauthMobile(): Promise<void> {
+        // 行動版使用 http://localhost（無埠號），Desktop app 類型自動允許
+        const redirectUri = 'http://localhost';
+        const authUrl     = this._buildAuthUrl(redirectUri);
+
+        const code = await new Promise<string | null>((resolve) => {
+            new GoogleOAuthMobileModal(this.app, authUrl, resolve).open();
+        });
+
+        if (!code) { new Notice('Google 授權已取消'); return; }
+        await this._exchangeCode(code, redirectUri);
+    }
+
+    private _buildAuthUrl(redirectUri: string): string {
+        return 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
+            client_id:     GOOGLE_CLIENT_ID,
+            redirect_uri:  redirectUri,
+            response_type: 'code',
+            scope:         'https://www.googleapis.com/auth/drive.file',
+            access_type:   'offline',
+            prompt:        'consent',
+        }).toString();
+    }
+
+    private async _exchangeCode(code: string, redirectUri: string): Promise<void> {
         const resp = await requestUrl({
             url:    'https://oauth2.googleapis.com/token',
             method: 'POST',
@@ -5215,7 +5230,7 @@ export default class EasyNotePlugin extends Plugin {
         this.settings.googleRefreshToken  = data.refresh_token ?? '';
         this.settings.googleAccessToken   = data.access_token  ?? '';
         this.settings.googleTokenExpiry   = Date.now() + (data.expires_in ?? 3600) * 1000;
-        this.settings.googleDriveFolderId = ''; // 重置資料夾快取
+        this.settings.googleDriveFolderId = '';
         await this.saveSettings();
         new Notice('✓ Google Drive 授權成功！');
     }
@@ -5229,6 +5244,74 @@ export default class EasyNotePlugin extends Plugin {
         await this.saveSettings();
         new Notice('已中斷 Google Drive 連線');
     }
+}
+
+// ─── Google OAuth 行動版 Modal ────────────────────────────────────────────────
+/**
+ * 行動版 OAuth 流程：
+ * 1. 使用者點「開啟瀏覽器授權」→ 在瀏覽器登入 Google 並同意
+ * 2. 瀏覽器跳轉到 http://localhost?code=XXX（會載入失敗，但網址列有 code）
+ * 3. 使用者複製網址列完整網址，貼到下方欄位，按「確認」
+ */
+class GoogleOAuthMobileModal extends Modal {
+    private authUrl:   string;
+    private onResolve: (code: string | null) => void;
+    private textarea!: HTMLTextAreaElement;
+
+    constructor(app: App, authUrl: string, onResolve: (code: string | null) => void) {
+        super(app);
+        this.authUrl   = authUrl;
+        this.onResolve = onResolve;
+    }
+
+    onOpen(): void {
+        const { contentEl } = this;
+        contentEl.empty();
+        contentEl.createEl('h3', { text: 'Google Drive 授權（行動版）' });
+
+        contentEl.createEl('p', {
+            text: '步驟 1：點擊下方按鈕，在瀏覽器中登入 Google 並同意授權。',
+        });
+
+        const openBtn = contentEl.createEl('button', { text: '開啟瀏覽器授權', cls: 'mod-cta' });
+        openBtn.style.marginBottom = '16px';
+        openBtn.addEventListener('click', () => window.open(this.authUrl));
+
+        contentEl.createEl('p', {
+            text: '步驟 2：授權後瀏覽器會跳轉到一個無法載入的頁面（http://localhost?code=…），請複製網址列中的完整網址，貼到下方。',
+        });
+
+        this.textarea             = contentEl.createEl('textarea');
+        this.textarea.placeholder = 'http://localhost?code=4/0AX…';
+        this.textarea.style.cssText = 'width:100%;height:80px;margin-bottom:12px;font-size:12px;';
+
+        const btnRow = contentEl.createEl('div', { cls: 'modal-button-container' });
+
+        const cancelBtn = btnRow.createEl('button', { text: '取消' });
+        cancelBtn.addEventListener('click', () => { this.onResolve(null); this.close(); });
+
+        const confirmBtn = btnRow.createEl('button', { text: '確認', cls: 'mod-cta' });
+        confirmBtn.addEventListener('click', () => {
+            const raw  = this.textarea.value.trim();
+            let code: string | null = null;
+            try {
+                // 嘗試把貼上內容當作完整網址解析
+                const url = new URL(raw);
+                code = url.searchParams.get('code');
+            } catch {
+                // 若貼的只是 code 字串本身，直接使用
+                if (raw && !raw.includes(' ')) code = raw;
+            }
+            if (!code) {
+                new Notice('無法從貼上的內容取得授權碼，請確認網址是否正確', 4000);
+                return;
+            }
+            this.onResolve(code);
+            this.close();
+        });
+    }
+
+    onClose(): void { this.contentEl.empty(); }
 }
 
 // ─── 設定頁面 ─────────────────────────────────────────────────────────────────
@@ -5490,10 +5573,11 @@ class EasyNoteSettingTab extends PluginSettingTab {
         // 顯示需要登記的 Redirect URI
         const uriInfoEl = containerEl.createEl('p', { cls: 'setting-item-description' });
         uriInfoEl.innerHTML =
-            `若出現 <code>redirect_uri_mismatch</code> 錯誤，請至 ` +
-            `Google Cloud Console → 憑證 → OAuth 2.0 用戶端 → 「已授權的重新導向 URI」，` +
-            `新增以下網址：<br><code style="user-select:all">http://localhost:42813</code><br>` +
-            `（建議選「桌面應用程式」類型，則無需手動新增）`;
+            `<b>桌面版</b>請在 Google Cloud Console → 憑證 → OAuth 2.0 用戶端 → 「已授權的重新導向 URI」新增：` +
+            `<br><code style="user-select:all">http://localhost:42813</code>` +
+            `<br><b>行動版（Android / iOS）</b>另需新增：` +
+            `<br><code style="user-select:all">http://localhost</code>` +
+            `<br>（若用戶端類型已選「桌面應用程式」則以上皆自動允許，無需手動新增）`;
 
         new Setting(containerEl)
             .setName('啟用 Google Drive 同步')
