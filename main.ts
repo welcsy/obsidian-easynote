@@ -3,12 +3,14 @@ import {
     ItemView,
     Modal,
     Notice,
+    Platform,
     Plugin,
     PluginSettingTab,
     Setting,
     TFile,
     WorkspaceLeaf,
     normalizePath,
+    requestUrl,
     setIcon,
 } from 'obsidian';
 
@@ -16,6 +18,16 @@ import {
 const VIEW_TYPE        = 'godot-easynote';
 const TOOLBAR_HEIGHT   = 52;
 const MIN_BRUSH_SIZE   = 1;
+
+// ─── Google OAuth2 憑證（build 時由 esbuild define 注入，不在原始碼中明文）───
+// 實際值來自 .env 檔案（已加入 .gitignore），CI 可設同名環境變數
+declare const __GOOGLE_CLIENT_ID__:     string;
+declare const __GOOGLE_CLIENT_SECRET__: string;
+const GOOGLE_CLIENT_ID     = __GOOGLE_CLIENT_ID__;
+const GOOGLE_CLIENT_SECRET = __GOOGLE_CLIENT_SECRET__;
+// OAuth loopback 固定埠號；對應 Google Cloud Console 登記的 Redirect URI
+const GOOGLE_OAUTH_PORT    = 42813;
+const GOOGLE_REDIRECT_URI  = `http://localhost:${GOOGLE_OAUTH_PORT}`;
 const MAX_BRUSH_SIZE   = 60;
 const HANDLE_SIZE      = 8;   // 選取控點大小（px）
 // 7 階筆刷大小（第 2 階 = 6px 為預設）
@@ -75,6 +87,12 @@ interface EasyNoteSettings {
     autoSyncPeriodMs:         number;  // 定時 auto-reload 間隔（毫秒）
     autoPeriodicSaveEnabled:  boolean; // 定時 auto-save 開關
     autoPeriodicSavePeriodMs: number;  // 定時 auto-save 間隔（毫秒）
+    // Google Drive 同步
+    googleDriveEnabled:    boolean;
+    googleRefreshToken:    string;
+    googleAccessToken:     string;
+    googleTokenExpiry:     number;
+    googleDriveFolderId:   string;
 }
 const DEFAULT_SETTINGS: EasyNoteSettings = {
     defaultColorIdx:  0,
@@ -91,6 +109,11 @@ const DEFAULT_SETTINGS: EasyNoteSettings = {
     autoSyncPeriodMs:         5000,
     autoPeriodicSaveEnabled:  false,
     autoPeriodicSavePeriodMs: 60000,
+    googleDriveEnabled:    false,
+    googleRefreshToken:    '',
+    googleAccessToken:     '',
+    googleTokenExpiry:     0,
+    googleDriveFolderId:   '',
 };
 
 // ─── .enote 專案格式 ──────────────────────────────────────────────────────────
@@ -371,11 +394,22 @@ class EasyNoteView extends ItemView {
     // Vault 檔案變更監聽（雙向同步）
     private _vaultModifyRef:      import('obsidian').EventRef | null = null;
     private _suppressVaultModify  = false;
+    // Google Drive 回呼
+    private driveUpload:   ((filename: string, content: Uint8Array) => Promise<void>) | null = null;
+    private driveDownload: ((filename: string) => Promise<Uint8Array | null>) | null = null;
 
-    constructor(leaf: WorkspaceLeaf, settings: EasyNoteSettings, saveSettings: () => Promise<void>) {
+    constructor(
+        leaf: WorkspaceLeaf,
+        settings: EasyNoteSettings,
+        saveSettings: () => Promise<void>,
+        driveUpload: ((filename: string, content: Uint8Array) => Promise<void>) | null = null,
+        driveDownload: ((filename: string) => Promise<Uint8Array | null>) | null = null,
+    ) {
         super(leaf);
-        this.settings     = settings;
-        this.saveSettings = saveSettings;
+        this.settings      = settings;
+        this.saveSettings  = saveSettings;
+        this.driveUpload   = driveUpload;
+        this.driveDownload = driveDownload;
     }
 
     getViewType():    string { return VIEW_TYPE;  }
@@ -3720,12 +3754,36 @@ class EasyNoteView extends ItemView {
     private startAutoSync(): void {
         this.stopAutoSync();
         const ms = Math.max(1000, this.settings.autoSyncPeriodMs ?? 5000);
-        this._autoSyncTimer = setInterval(() => {
+        this._autoSyncTimer = setInterval(async () => {
             // 沒有檔名則跳過
             if (!this.lastProjectName) return;
+            const driveFilename = `${this.lastProjectName}.enote`;
             const filepath = normalizePath(
-                `${this.settings.saveFolder}/${this.lastProjectName}.enote`
+                `${this.settings.saveFolder}/${driveFilename}`
             );
+            // 若 Google Drive 已啟用，先從 Drive 下載並更新本地檔案
+            if (this.settings.googleDriveEnabled && this.driveDownload) {
+                try {
+                    const content = await this.driveDownload(driveFilename);
+                    if (content) {
+                        const folder = normalizePath(this.settings.saveFolder);
+                        if (!(await this.app.vault.adapter.exists(folder))) {
+                            await this.app.vault.createFolder(folder);
+                        }
+                        if (await this.app.vault.adapter.exists(filepath)) {
+                            const existing = this.app.vault.getAbstractFileByPath(filepath);
+                            if (existing instanceof TFile) {
+                                await this.app.vault.modifyBinary(existing, content.buffer as ArrayBuffer);
+                            }
+                        } else {
+                            await this.app.vault.createBinary(filepath, content.buffer as ArrayBuffer);
+                        }
+                    }
+                } catch (err) {
+                    console.error('[EasyNote] Drive download error:', err);
+                }
+            }
+            // 從本地 Vault 載入
             const file = this.app.vault.getAbstractFileByPath(filepath);
             if (file instanceof TFile) {
                 this.loadProject(file);
@@ -3807,6 +3865,16 @@ class EasyNoteView extends ItemView {
                 }
             } else {
                 await this.app.vault.createBinary(filepath, bytes.buffer as ArrayBuffer);
+            }
+            // 上傳到 Google Drive（若已啟用）
+            if (this.settings.googleDriveEnabled && this.driveUpload) {
+                const driveFilename = this.lastProjectName
+                    ? `${this.lastProjectName}.enote`
+                    : EasyNoteView.AUTOSAVE_FILENAME;
+                this.driveUpload(driveFilename, bytes).catch((err) => {
+                    console.error('[EasyNote] Drive upload error:', err);
+                    new Notice('Google Drive 上傳失敗', 2000);
+                });
             }
             this.lastAutoSaveTime = new Date();
             this.refreshStatus();
@@ -4877,7 +4945,13 @@ export default class EasyNotePlugin extends Plugin {
         await this.loadSettings();
 
         // 註冊自訂 View
-        this.registerView(VIEW_TYPE, (leaf) => new EasyNoteView(leaf, this.settings, () => this.saveSettings()));
+        this.registerView(VIEW_TYPE, (leaf) => new EasyNoteView(
+            leaf,
+            this.settings,
+            () => this.saveSettings(),
+            (filename, content) => this.uploadToGoogleDrive(filename, content),
+            (filename) => this.downloadFromGoogleDrive(filename),
+        ));
 
         // 左側 Ribbon 圖示
         this.addRibbonIcon('pencil', '開啟 EasyNote 手繪筆記', () => {
@@ -4915,6 +4989,245 @@ export default class EasyNotePlugin extends Plugin {
 
     async saveSettings(): Promise<void> {
         await this.saveData(this.settings);
+    }
+
+    // ── Google Drive 整合 ──────────────────────────────────────────────────────
+
+    /** 取得有效的 Access Token（必要時自動 refresh） */
+    async getValidAccessToken(): Promise<string | null> {
+        if (!this.settings.googleRefreshToken) {
+            return null;
+        }
+        // 若目前 token 仍有效（預留 1 分鐘緩衝），直接回傳
+        if (this.settings.googleAccessToken && Date.now() < this.settings.googleTokenExpiry - 60000) {
+            return this.settings.googleAccessToken;
+        }
+        // 使用 refresh_token 換新 access token
+        try {
+            const resp = await requestUrl({
+                url:    'https://oauth2.googleapis.com/token',
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: new URLSearchParams({
+                    client_id:     GOOGLE_CLIENT_ID,
+                    client_secret: GOOGLE_CLIENT_SECRET,
+                    refresh_token: this.settings.googleRefreshToken,
+                    grant_type:    'refresh_token',
+                }).toString(),
+                throw: false,
+            });
+            if (resp.status !== 200) {
+                console.error('[EasyNote] Token refresh failed:', resp.json);
+                return null;
+            }
+            const data = resp.json;
+            this.settings.googleAccessToken = data.access_token;
+            this.settings.googleTokenExpiry = Date.now() + (data.expires_in ?? 3600) * 1000;
+            await this.saveSettings();
+            return this.settings.googleAccessToken;
+        } catch (err) {
+            console.error('[EasyNote] Token refresh error:', err);
+            return null;
+        }
+    }
+
+    /** 確保 Google Drive 上有 EasyNote-Sync 資料夾，回傳其 ID */
+    async ensureGoogleDriveFolder(token: string): Promise<string> {
+        if (this.settings.googleDriveFolderId) return this.settings.googleDriveFolderId;
+        const FOLDER_NAME = 'EasyNote-Sync';
+        const q = encodeURIComponent(
+            `name='${FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`
+        );
+        const searchResp = await requestUrl({
+            url:    `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id)`,
+            method: 'GET',
+            headers: { Authorization: `Bearer ${token}` },
+        });
+        const files = searchResp.json.files ?? [];
+        if (files.length > 0) {
+            this.settings.googleDriveFolderId = files[0].id;
+            await this.saveSettings();
+            return files[0].id;
+        }
+        // 資料夾不存在，建立一個
+        const createResp = await requestUrl({
+            url:    'https://www.googleapis.com/drive/v3/files',
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body:   JSON.stringify({ name: FOLDER_NAME, mimeType: 'application/vnd.google-apps.folder' }),
+        });
+        this.settings.googleDriveFolderId = createResp.json.id;
+        await this.saveSettings();
+        return this.settings.googleDriveFolderId;
+    }
+
+    /** 上傳（或更新）檔案到 Google Drive */
+    async uploadToGoogleDrive(filename: string, content: Uint8Array): Promise<void> {
+        if (!this.settings.googleDriveEnabled) return;
+        const token = await this.getValidAccessToken();
+        if (!token) { console.warn('[EasyNote] Drive upload skipped: no token'); return; }
+        const folderId = await this.ensureGoogleDriveFolder(token);
+        // 查詢是否已存在同名檔案
+        const q = encodeURIComponent(`name='${filename}' and '${folderId}' in parents and trashed=false`);
+        const searchResp = await requestUrl({
+            url:    `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id)`,
+            method: 'GET',
+            headers: { Authorization: `Bearer ${token}` },
+        });
+        const existing = searchResp.json.files ?? [];
+        if (existing.length > 0) {
+            // 更新現有檔案：先啟動 resumable upload，再 PUT 內容
+            const fileId = existing[0].id;
+            const initResp = await requestUrl({
+                url:    `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=resumable`,
+                method: 'PATCH',
+                headers: {
+                    Authorization:            `Bearer ${token}`,
+                    'Content-Type':           'application/json',
+                    'X-Upload-Content-Type':  'application/octet-stream',
+                    'X-Upload-Content-Length': String(content.length),
+                },
+                body:  JSON.stringify({}),
+                throw: false,
+            });
+            const uploadUrl = initResp.headers['location'];
+            if (!uploadUrl) throw new Error('[EasyNote] No resumable upload URL returned');
+            await requestUrl({
+                url:    uploadUrl,
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/octet-stream' },
+                body:   content.buffer as ArrayBuffer,
+            });
+        } else {
+            // 建立新檔案：multipart upload（metadata + content）
+            const boundary = `EasyNoteBoundary${Date.now()}`;
+            const metaJson = JSON.stringify({ name: filename, parents: [folderId] });
+            const header   = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metaJson}\r\n--${boundary}\r\nContent-Type: application/octet-stream\r\n\r\n`;
+            const footer   = `\r\n--${boundary}--`;
+            const headerBytes = new TextEncoder().encode(header);
+            const footerBytes = new TextEncoder().encode(footer);
+            const body = new Uint8Array(headerBytes.length + content.length + footerBytes.length);
+            body.set(headerBytes, 0);
+            body.set(content,     headerBytes.length);
+            body.set(footerBytes, headerBytes.length + content.length);
+            await requestUrl({
+                url:    'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',
+                method: 'POST',
+                headers: {
+                    Authorization:  `Bearer ${token}`,
+                    'Content-Type': `multipart/related; boundary=${boundary}`,
+                },
+                body: body.buffer as ArrayBuffer,
+            });
+        }
+    }
+
+    /** 從 Google Drive 下載檔案，回傳內容位元組（找不到時回傳 null） */
+    async downloadFromGoogleDrive(filename: string): Promise<Uint8Array | null> {
+        if (!this.settings.googleDriveEnabled) return null;
+        const token = await this.getValidAccessToken();
+        if (!token) { console.warn('[EasyNote] Drive download skipped: no token'); return null; }
+        const folderId = await this.ensureGoogleDriveFolder(token);
+        const q = encodeURIComponent(`name='${filename}' and '${folderId}' in parents and trashed=false`);
+        const searchResp = await requestUrl({
+            url:    `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id)`,
+            method: 'GET',
+            headers: { Authorization: `Bearer ${token}` },
+        });
+        const files = searchResp.json.files ?? [];
+        if (files.length === 0) return null;
+        const fileId = files[0].id;
+        const resp = await requestUrl({
+            url:    `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+            method: 'GET',
+            headers: { Authorization: `Bearer ${token}` },
+        });
+        return new Uint8Array(resp.arrayBuffer);
+    }
+
+    /** 開啟瀏覽器引導使用者完成 Google OAuth2 授權，並儲存 Refresh Token */
+    async startGoogleOAuthFlow(): Promise<void> {
+        if (!Platform.isDesktopApp) {
+            new Notice('Google Drive 授權僅支援桌面版 Obsidian');
+            return;
+        }
+        const port        = GOOGLE_OAUTH_PORT;
+        const redirectUri = GOOGLE_REDIRECT_URI;
+        const authUrl = 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
+            client_id:     GOOGLE_CLIENT_ID,
+            redirect_uri:  redirectUri,
+            response_type: 'code',
+            scope:         'https://www.googleapis.com/auth/drive.file',
+            access_type:   'offline',
+            prompt:        'consent',
+        }).toString();
+
+        const code = await new Promise<string | null>((resolve) => {
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const http = require('http') as typeof import('http');
+            const server = http.createServer((req, res) => {
+                const url  = new URL(req.url ?? '/', redirectUri);
+                const code = url.searchParams.get('code');
+                res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+                res.end('<html><body style="font-family:sans-serif;padding:40px"><h2>✓ 授權成功！請回到 Obsidian。</h2><p>此視窗可以關閉。</p></body></html>');
+                server.close();
+                resolve(code);
+            });
+            server.listen(port, '127.0.0.1', () => {
+                window.open(authUrl);
+                new Notice('請在瀏覽器中完成 Google 登入授權…', 10000);
+            });
+            server.on('error', (err: NodeJS.ErrnoException) => {
+                if (err.code === 'EADDRINUSE') {
+                    new Notice(`埠號 ${port} 已被佔用，請關閉佔用該埠的程式後再試`, 5000);
+                }
+                resolve(null);
+            });
+            // 2 分鐘後超時
+            setTimeout(() => { try { server.close(); } catch { /* ignore */ } resolve(null); }, 120000);
+        });
+
+        if (!code) {
+            new Notice('Google 授權失敗或超時，請重試');
+            return;
+        }
+        // 用授權碼換取 refresh token
+        const resp = await requestUrl({
+            url:    'https://oauth2.googleapis.com/token',
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({
+                client_id:     GOOGLE_CLIENT_ID,
+                client_secret: GOOGLE_CLIENT_SECRET,
+                code,
+                redirect_uri:  redirectUri,
+                grant_type:    'authorization_code',
+            }).toString(),
+            throw: false,
+        });
+        if (resp.status !== 200) {
+            const detail = resp.json?.error_description ?? resp.json?.error ?? '';
+            console.error('[EasyNote] OAuth token exchange failed:', resp.json);
+            new Notice(`Google 授權失敗：${detail || 'Token 交換錯誤'}\n請確認 Google Cloud Console 的 Redirect URI 是否設為 ${redirectUri}`, 8000);
+            return;
+        }
+        const data = resp.json;
+        this.settings.googleRefreshToken  = data.refresh_token ?? '';
+        this.settings.googleAccessToken   = data.access_token  ?? '';
+        this.settings.googleTokenExpiry   = Date.now() + (data.expires_in ?? 3600) * 1000;
+        this.settings.googleDriveFolderId = ''; // 重置資料夾快取
+        await this.saveSettings();
+        new Notice('✓ Google Drive 授權成功！');
+    }
+
+    /** 中斷 Google Drive 連線，清除所有已儲存的憑證 */
+    async revokeGoogleAuth(): Promise<void> {
+        this.settings.googleRefreshToken  = '';
+        this.settings.googleAccessToken   = '';
+        this.settings.googleTokenExpiry   = 0;
+        this.settings.googleDriveFolderId = '';
+        await this.saveSettings();
+        new Notice('已中斷 Google Drive 連線');
     }
 }
 
@@ -5166,5 +5479,54 @@ class EasyNoteSettingTab extends PluginSettingTab {
                         await this.plugin.saveSettings();
                     })
             );
+
+        // ── Google Drive 同步 ────────────────────────────────────────────────
+        containerEl.createEl('h3', { text: 'Google Drive 同步' });
+        containerEl.createEl('p', {
+            cls:  'setting-item-description',
+            text: '自動儲存時同步上傳到 Google Drive，自動載入時從 Google Drive 下載（同步資料夾：EasyNote-Sync）。',
+        });
+
+        // 顯示需要登記的 Redirect URI
+        const uriInfoEl = containerEl.createEl('p', { cls: 'setting-item-description' });
+        uriInfoEl.innerHTML =
+            `若出現 <code>redirect_uri_mismatch</code> 錯誤，請至 ` +
+            `Google Cloud Console → 憑證 → OAuth 2.0 用戶端 → 「已授權的重新導向 URI」，` +
+            `新增以下網址：<br><code style="user-select:all">http://localhost:42813</code><br>` +
+            `（建議選「桌面應用程式」類型，則無需手動新增）`;
+
+        new Setting(containerEl)
+            .setName('啟用 Google Drive 同步')
+            .setDesc('開啟後，自動儲存時同步上傳到 Google Drive，自動載入時從 Google Drive 下載。')
+            .addToggle((toggle) => {
+                toggle.setValue(this.plugin.settings.googleDriveEnabled ?? false);
+                toggle.onChange(async (value) => {
+                    this.plugin.settings.googleDriveEnabled = value;
+                    await this.plugin.saveSettings();
+                });
+            });
+
+        const isConnected = !!this.plugin.settings.googleRefreshToken;
+        new Setting(containerEl)
+            .setName('Google Drive 連線狀態')
+            .setDesc(isConnected
+                ? '✓ 已連線 Google Drive（同步資料夾：EasyNote-Sync）'
+                : '尚未連線，請點擊「連線 Google Drive」並在瀏覽器中登入 Google 帳戶。')
+            .addButton((btn) => {
+                btn.setButtonText(isConnected ? '重新授權' : '連線 Google Drive');
+                btn.setCta();
+                btn.onClick(async () => {
+                    await this.plugin.startGoogleOAuthFlow();
+                    this.display();
+                });
+            })
+            .addButton((btn) => {
+                btn.setButtonText('中斷連線');
+                btn.setDisabled(!isConnected);
+                btn.onClick(async () => {
+                    await this.plugin.revokeGoogleAuth();
+                    this.display();
+                });
+            });
     }
 }
