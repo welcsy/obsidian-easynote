@@ -862,6 +862,35 @@ class EasyNoteView extends ItemView {
 
         const canvasActions = row2.createEl('div', { cls: 'easynote-canvas-actions-wrap' });
 
+        // 開啟新畫布
+        const newCanvasBtn = canvasActions.createEl('button', {
+            cls:   'easynote-btn',
+            text:  '開啟新畫布',
+            title: '清空所有圖層，開始全新畫布（不可復原）',
+        });
+        newCanvasBtn.addEventListener('click', () => {
+            const hasContent = this.imageLayers.length > 0
+                || this.textLayers.length > 0
+                || this.markdownLayers.length > 0
+                || (() => {
+                    const d = this.paintCtx.getImageData(0, 0, 1, 1).data;
+                    // 快速判斷：整個 paintCanvas 是否有任何筆觸（只抽樣中心點，完整判斷耗費資源）
+                    return false;
+                })();
+            if (hasContent || this.history.length > 0) {
+                const confirmed = confirm('確定要開啟新畫布嗎？目前所有內容將被清除，此操作無法復原。');
+                if (!confirmed) return;
+            }
+            this.clearCanvas();
+            this.history     = [];
+            this.historyIdx  = -1;
+            this.lastProjectName = '';
+            this.lastSaveName    = '';
+            this.refreshUndoRedo();
+            this.refreshStatus();
+        });
+        canvasActions.createEl('div', { cls: 'easynote-sep' });
+
         // 畫布大小（直立模式下與儲存/載入/匯出同列）
         const canvasSizeBtn = canvasActions.createEl('button', {
             cls:   'easynote-btn',
