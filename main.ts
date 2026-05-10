@@ -77,7 +77,8 @@ interface EasyNoteSettings {
     defaultBrushSize: number;
     saveFolder:       string;
     defaultColors:    string[];
-    brushMode:        'steps' | 'continuous';
+    brushMode:        'pixel' | 'stroke-layer'; // 單點模式（pixel）| 圖片模式（stroke-layer）
+    brushSizeMode:   'steps' | 'continuous';   // 7階 | 連續（兩種筆刷模式共用）
     startupMode:      'previous' | 'new';
     defaultCanvasWidth:  number;
     defaultCanvasHeight: number;
@@ -99,7 +100,8 @@ const DEFAULT_SETTINGS: EasyNoteSettings = {
     defaultBrushSize: 6,
     saveFolder:       'EasyNote',
     defaultColors:    [...COLORS],
-    brushMode:        'steps',
+    brushMode:        'stroke-layer',
+    brushSizeMode:   'steps',
     startupMode:      'new',
     defaultCanvasWidth:  1920,
     defaultCanvasHeight: 1080,
@@ -117,7 +119,7 @@ const DEFAULT_SETTINGS: EasyNoteSettings = {
 };
 
 // ─── .enote 專案格式 ──────────────────────────────────────────────────────────
-interface ENoteImageLayer    { src: string; x: number; y: number; w: number; h: number; rotation?: number; }
+interface ENoteImageLayer    { src: string; x: number; y: number; w: number; h: number; rotation?: number; strokeName?: string; }
 interface ENoteTextLayer     { text: string; x: number; y: number; fontSize: number; color: string; linkedNotePath?: string; rotation?: number; }
 interface ENoteMarkdownLayer { text: string; x: number; y: number; fontSize: number; color: string; width: number; linkedNotePath?: string; rotation?: number; }
 interface ENote {
@@ -137,6 +139,7 @@ interface ImageLayer {
     w: number;
     h: number;
     rotation?: number;
+    strokeName?: string;  // 設定時若為 stroke-layer 模式，每一筆自動命名
 }
 
 type HandleType = 'move' | 'nw' | 'ne' | 'sw' | 'se' | 'rotate';
@@ -356,6 +359,10 @@ class EasyNoteView extends ItemView {
     private _vpCache:  HTMLCanvasElement | null = null;
     private _vpCacheX = 0;  // viewport 左上角（畫布邏輯座標）
     private _vpCacheY = 0;
+
+    // stroke-layer 模式：筆觸 dirty rect 追蹤 & 自動命名計數器
+    private _strokeDirty:   { x1: number; y1: number; x2: number; y2: number } | null = null;
+    private _strokeCounter  = 0;
 
     // 長按偵測（Android 觸控選單）
     private longPressTimer:    ReturnType<typeof setTimeout> | null = null;
@@ -793,7 +800,7 @@ class EasyNoteView extends ItemView {
         this.sizeSlider           = row2.createEl('input');
         this.sizeSlider.type      = 'range';
         this.sizeSlider.step      = '1';
-        if ((this.settings.brushMode ?? 'steps') === 'steps') {
+        if (this.effectiveSizeMode === 'steps') {
             this.sizeSlider.min   = '1';
             this.sizeSlider.max   = '7';
             this.sizeSlider.value = String(brushSizeToStep(this.brushSize));
@@ -807,7 +814,7 @@ class EasyNoteView extends ItemView {
         this.sizeSlider.className = 'easynote-slider';
         this.sizeValueLabel = row2.createEl('span', { cls: 'easynote-slider-value' });
         this.sizeSlider.addEventListener('input', () => {
-            if ((this.settings.brushMode ?? 'steps') === 'steps') {
+            if (this.effectiveSizeMode === 'steps') {
                 this.brushSize = BRUSH_STEPS[parseInt(this.sizeSlider.value) - 1];
             } else {
                 this.brushSize = parseInt(this.sizeSlider.value);
@@ -1255,6 +1262,20 @@ class EasyNoteView extends ItemView {
                 this.render();
             } else {
                 // 畫筆 / 橡皮擦
+                // stroke-layer 模式下橡皮擦：點選圖片圖層即刪除
+                if (this.settings.brushMode === 'stroke-layer' && this.eraser) {
+                    for (let i = this.imageLayers.length - 1; i >= 0; i--) {
+                        if (this.pointInLayer(mx, my, this.imageLayers[i])) {
+                            this.pushHistory('橡皮擦（圖層）');
+                            this.imageLayers.splice(i, 1);
+                            this.selectedIdx = -1;
+                            this.render();
+                            this.scheduleAutosave();
+                            return;
+                        }
+                    }
+                    return;  // 沒點到任何圖層，不做任何事
+                }
                 this.pushHistory(this.eraser ? '橡皮擦' : '筆觸');  // 每次筆觸開始前保存快照
                 this.drawing = true;
                 this.prevX = mx; this.prevY = my;
@@ -1573,6 +1594,18 @@ class EasyNoteView extends ItemView {
                     this.paintStroke(this.prevX, this.prevY, cpx, cpy);
                     this.prevX = cpx; this.prevY = cpy;
                 }
+            } else if (!this.drawing && this.tool === 'draw' && this.eraser && this.settings.brushMode === 'stroke-layer') {
+                // stroke-layer 橡皮擦拖曳：滑過圖片圖層時刪除
+                for (let i = this.imageLayers.length - 1; i >= 0; i--) {
+                    if (this.pointInLayer(mx, my, this.imageLayers[i])) {
+                        this.pushHistory('橡皮擦（圖層）');
+                        this.imageLayers.splice(i, 1);
+                        this.selectedIdx = -1;
+                        this.render();
+                        this.scheduleAutosave();
+                        break;
+                    }
+                }
             } else if (this.tool === 'paintselect') {
                 if (this.paintFragDrag && this.paintFragment) {
                     const ds    = this.paintFragDrag;
@@ -1722,6 +1755,10 @@ class EasyNoteView extends ItemView {
             this.dragState     = null;
             this.textDragState = null;
             this.mdDragState   = null;
+            // stroke-layer 模式：筆觸結束，提交為圖片圖層
+            if (this.settings.brushMode === 'stroke-layer' && !this.eraser) {
+                this.commitStrokeAsLayer();
+            }
             this.scheduleRender();  // 筆觸結束後確保以完整畫布合成一次, (e) => {
             this.activePointers.delete(e.pointerId);
             if (this.longPressTimer) { clearTimeout(this.longPressTimer); this.longPressTimer = null; }
@@ -1734,6 +1771,9 @@ class EasyNoteView extends ItemView {
         this.canvas.addEventListener('pointerleave', (e) => {
             if (e.pointerType !== 'mouse') return;  // 觸控滑出由 pointerup/cancel 處理
             this.isPanning     = false;
+            if (this.drawing && this.settings.brushMode === 'stroke-layer' && !this.eraser) {
+                this.commitStrokeAsLayer();
+            }
             this.drawing       = false;
             this._vpCache      = null;
             this.dragState     = null;
@@ -2791,6 +2831,18 @@ class EasyNoteView extends ItemView {
         this.paintCtx.stroke();
         this.paintCtx.restore();
         this.syncStrokeToCache(x, y, x, y);
+        // stroke-layer 模式：追蹤 dirty rect
+        if (this.settings.brushMode === 'stroke-layer' && !this.eraser) {
+            const r = this.brushSize / 2;
+            if (!this._strokeDirty) {
+                this._strokeDirty = { x1: x - r, y1: y - r, x2: x + r, y2: y + r };
+            } else {
+                this._strokeDirty.x1 = Math.min(this._strokeDirty.x1, x - r);
+                this._strokeDirty.y1 = Math.min(this._strokeDirty.y1, y - r);
+                this._strokeDirty.x2 = Math.max(this._strokeDirty.x2, x + r);
+                this._strokeDirty.y2 = Math.max(this._strokeDirty.y2, y + r);
+            }
+        }
         this.scheduleRender();
     }
 
@@ -2815,7 +2867,71 @@ class EasyNoteView extends ItemView {
         this.paintCtx.stroke();
         this.paintCtx.restore();
         this.syncStrokeToCache(x1, y1, x2, y2);
+        // stroke-layer 模式：追蹤 dirty rect
+        if (this.settings.brushMode === 'stroke-layer' && !this.eraser) {
+            const r = this.brushSize / 2;
+            const minX = Math.min(x1, x2) - r;
+            const minY = Math.min(y1, y2) - r;
+            const maxX = Math.max(x1, x2) + r;
+            const maxY = Math.max(y1, y2) + r;
+            if (!this._strokeDirty) {
+                this._strokeDirty = { x1: minX, y1: minY, x2: maxX, y2: maxY };
+            } else {
+                this._strokeDirty.x1 = Math.min(this._strokeDirty.x1, minX);
+                this._strokeDirty.y1 = Math.min(this._strokeDirty.y1, minY);
+                this._strokeDirty.x2 = Math.max(this._strokeDirty.x2, maxX);
+                this._strokeDirty.y2 = Math.max(this._strokeDirty.y2, maxY);
+            }
+        }
         this.scheduleRender();
+    }
+
+    /** stroke-layer 模式：將 paintCanvas 上當前筆觸提取為圖片圖層，並清除對應區域 */
+    private commitStrokeAsLayer(): void {
+        if (!this._strokeDirty) return;
+        const PS = this.paintScale;
+        const cw = this.canvas.width;
+        const ch = this.canvas.height;
+        const d = this._strokeDirty;
+        const margin = 2;
+        const lx  = Math.max(0, Math.floor(d.x1) - margin);
+        const ly  = Math.max(0, Math.floor(d.y1) - margin);
+        const lx2 = Math.min(cw, Math.ceil(d.x2) + margin);
+        const ly2 = Math.min(ch, Math.ceil(d.y2) + margin);
+        const lw  = lx2 - lx;
+        const lh  = ly2 - ly;
+        if (lw <= 0 || lh <= 0) { this._strokeDirty = null; return; }
+
+        // 從 paintCanvas（可能縮放）的對應區域拷貝到獨立 canvas
+        const tmp = document.createElement('canvas');
+        tmp.width  = lw;
+        tmp.height = lh;
+        const tc = tmp.getContext('2d')!;
+        tc.drawImage(
+            this.paintCanvas,
+            lx * PS, ly * PS, lw * PS, lh * PS,
+            0, 0, lw, lh,
+        );
+
+        // 清除 paintCanvas 上此筆觸區域
+        this.paintCtx.clearRect(lx * PS, ly * PS, lw * PS, lh * PS);
+        this._strokeDirty = null;
+
+        // 自動命名：Stroke-001, Stroke-002, …
+        this._strokeCounter++;
+        const strokeName = `Stroke-${String(this._strokeCounter).padStart(3, '0')}`;
+
+        // 建立圖片圖層（帶 strokeName 標記）
+        const img = new Image();
+        img.onload = () => {
+            this.imageLayers.push({ img, x: lx, y: ly, w: lw, h: lh, strokeName });
+            this.selectedIdx     = -1;
+            this.selectedTextIdx = -1;
+            this.selectedMdIdx   = -1;
+            this.render();
+            this.scheduleAutosave();
+        };
+        img.src = tmp.toDataURL('image/png');
     }
 
     private clearCanvas(): void {
@@ -3033,6 +3149,11 @@ class EasyNoteView extends ItemView {
 
     // ── 工具切換 ──────────────────────────────────────────────────────────────
 
+    /** 當前有效的大小模式（7階 / 連續），兩種筆刷模式共用 */
+    private get effectiveSizeMode(): 'steps' | 'continuous' {
+        return this.settings.brushSizeMode ?? 'steps';
+    }
+
     private setTool(t: 'draw' | 'select' | 'text' | 'paintselect' | 'pan'): void {
         // 離開 paintselect 時先 commit fragment
         if (this.tool === 'paintselect' && t !== 'paintselect') {
@@ -3103,7 +3224,7 @@ class EasyNoteView extends ItemView {
     private refreshStatus(): void {
         // 筆刷 & 透明度 toolbar 數值標籤
         if (this.sizeValueLabel) {
-            if ((this.settings.brushMode ?? 'steps') === 'steps') {
+            if (this.effectiveSizeMode === 'steps') {
                 const step = brushSizeToStep(this.brushSize);
                 this.sizeValueLabel.textContent = `第${step}階(${this.brushSize}px)`;
             } else {
@@ -3276,7 +3397,7 @@ class EasyNoteView extends ItemView {
             case '4': this.setColor(3); break;
             case '5': this.setColor(4); break;
             case '+': case '=':
-                if ((this.settings.brushMode ?? 'steps') === 'steps') {
+                if (this.effectiveSizeMode === 'steps') {
                     const ns = Math.min(7, brushSizeToStep(this.brushSize) + 1);
                     this.brushSize        = BRUSH_STEPS[ns - 1];
                     this.sizeSlider.value = String(ns);
@@ -3287,7 +3408,7 @@ class EasyNoteView extends ItemView {
                 this.refreshStatus();
                 break;
             case '-':
-                if ((this.settings.brushMode ?? 'steps') === 'steps') {
+                if (this.effectiveSizeMode === 'steps') {
                     const ps = Math.max(1, brushSizeToStep(this.brushSize) - 1);
                     this.brushSize        = BRUSH_STEPS[ps - 1];
                     this.sizeSlider.value = String(ps);
@@ -3863,7 +3984,7 @@ class EasyNoteView extends ItemView {
                 tmp.width  = lay.img.naturalWidth  || lay.w;
                 tmp.height = lay.img.naturalHeight || lay.h;
                 tmp.getContext('2d')!.drawImage(lay.img, 0, 0);
-                return { src: tmp.toDataURL('image/png'), x: lay.x, y: lay.y, w: lay.w, h: lay.h, rotation: lay.rotation };
+                return { src: tmp.toDataURL('image/png'), x: lay.x, y: lay.y, w: lay.w, h: lay.h, rotation: lay.rotation, strokeName: lay.strokeName };
             });
             const project: ENote = {
                 version:        1,
@@ -3924,7 +4045,7 @@ class EasyNoteView extends ItemView {
                 tmp.width   = lay.img.naturalWidth  || lay.w;
                 tmp.height  = lay.img.naturalHeight || lay.h;
                 tmp.getContext('2d')!.drawImage(lay.img, 0, 0);
-                return { src: tmp.toDataURL('image/png'), x: lay.x, y: lay.y, w: lay.w, h: lay.h, rotation: lay.rotation };
+                return { src: tmp.toDataURL('image/png'), x: lay.x, y: lay.y, w: lay.w, h: lay.h, rotation: lay.rotation, strokeName: lay.strokeName };
             });
 
             const project: ENote = {
@@ -3998,7 +4119,7 @@ class EasyNoteView extends ItemView {
                 await new Promise<void>((resolve) => {
                     const img = new Image();
                     img.onload = () => {
-                        this.imageLayers.push({ img, x: lay.x, y: lay.y, w: lay.w, h: lay.h, rotation: lay.rotation || 0 });
+                        this.imageLayers.push({ img, x: lay.x, y: lay.y, w: lay.w, h: lay.h, rotation: lay.rotation || 0, strokeName: lay.strokeName });
                         resolve();
                     };
                     img.onerror = () => resolve();
@@ -4500,15 +4621,35 @@ class EasyNoteView extends ItemView {
             lines.push(`| 有筆畫內容 | ${hasContent ? '是' : '否'} |`);
             lines.push(``);
 
-            // 圖片圖層
-            lines.push(`## 圖片圖層（共 ${this.imageLayers.length} 個）`);
+            // 分離：筆觸圖層（stroke-layer 模式） vs 一般圖片圖層
+            const strokeLayers = this.imageLayers.filter(l => l.strokeName);
+            const imgOnlyLayers = this.imageLayers.filter(l => !l.strokeName);
+
+            // 筆觸圖層（圖層筆觸模式）
+            lines.push(`## 筆觸圖層——圖層筆觸模式（共 ${strokeLayers.length} 筆）`);
             lines.push(``);
-            if (this.imageLayers.length === 0) {
+            if (strokeLayers.length === 0) {
+                lines.push(`（無筆觸資料，需切換至「圖層筆觸」筆刷模式後繪製）`);
+            } else {
+                lines.push(`| 筆觸名稱 | 左上角 X | 左上角 Y | 右下角 X | 右下角 Y | 寬 | 高 |`);
+                lines.push(`|----------|----------|----------|----------|----------|----|-----|`);
+                strokeLayers.forEach((lay) => {
+                    const x2 = lay.x + lay.w;
+                    const y2 = lay.y + lay.h;
+                    lines.push(`| ${lay.strokeName} | ${lay.x} | ${lay.y} | ${x2} | ${y2} | ${lay.w} | ${lay.h} |`);
+                });
+            }
+            lines.push(``);
+
+            // 一般圖片圖層（匯入的圖片，非筆觸）
+            lines.push(`## 圖片圖層（共 ${imgOnlyLayers.length} 個）`);
+            lines.push(``);
+            if (imgOnlyLayers.length === 0) {
                 lines.push(`（無）`);
             } else {
                 lines.push(`| # | X | Y | 寬 | 高 | 旋轉 |`);
                 lines.push(`|---|---|---|----|----|------|`);
-                this.imageLayers.forEach((lay, i) => {
+                imgOnlyLayers.forEach((lay, i) => {
                     const rot = lay.rotation !== undefined ? `${lay.rotation.toFixed(2)} rad` : `0 rad`;
                     lines.push(`| ${i + 1} | ${lay.x} | ${lay.y} | ${lay.w} | ${lay.h} | ${rot} |`);
                 });
@@ -5497,20 +5638,36 @@ class EasyNoteSettingTab extends PluginSettingTab {
         // 筆刷模式
         new Setting(containerEl)
             .setName('筆刷模式')
-            .setDesc('7 階模式：固定 7 個大小檔殔；連續模式：自由調整 1–60px')
+            .setDesc('單點模式：每一筆直接畫在繪畫層（傳統像素繪製）；圖片模式：每一筆畫完後自動成為可選取/刪除的圖片圖層，橡皮擦改為點選刪除')
+            .addDropdown((drop) => {
+                drop.addOption('pixel', '單點模式');
+                drop.addOption('stroke-layer', '圖片模式');
+                drop.setValue(this.plugin.settings.brushMode ?? 'pixel');
+                drop.onChange(async (value) => {
+                    this.plugin.settings.brushMode = value as 'pixel' | 'stroke-layer';
+                    await this.plugin.saveSettings();
+                    this.display();
+                });
+            });
+
+        // 筆刷大小（共用：7 階 / 連續）
+        new Setting(containerEl)
+            .setName('筆刷大小模式')
+            .setDesc('7 階：固定 7 個大小等級（快速切換）；連續：自由調整 1–60px')
             .addDropdown((drop) => {
                 drop.addOption('steps', '7 階');
                 drop.addOption('continuous', '連續');
-                drop.setValue(this.plugin.settings.brushMode ?? 'steps');
+                drop.setValue(this.plugin.settings.brushSizeMode ?? 'steps');
                 drop.onChange(async (value) => {
-                    this.plugin.settings.brushMode = value as 'steps' | 'continuous';
+                    this.plugin.settings.brushSizeMode = value as 'steps' | 'continuous';
                     await this.plugin.saveSettings();
                     this.display();
                 });
             });
 
         // 預設筆刷大小
-        if ((this.plugin.settings.brushMode ?? 'steps') === 'steps') {
+        const effectiveBrushMode = this.plugin.settings.brushSizeMode ?? 'steps';
+        if (effectiveBrushMode === 'steps') {
             const curStep = brushSizeToStep(this.plugin.settings.defaultBrushSize);
             new Setting(containerEl)
                 .setName('預設筆刷大小')
