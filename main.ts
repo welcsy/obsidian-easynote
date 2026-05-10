@@ -364,6 +364,9 @@ class EasyNoteView extends ItemView {
     private _strokeDirty:   { x1: number; y1: number; x2: number; y2: number } | null = null;
     private _strokeCounter  = 0;
 
+    // 自訂游標 dot（固定定位 overlay）
+    private _cursorDot: HTMLDivElement | null = null;
+
     // 長按偵測（Android 觸控選單）
     private longPressTimer:    ReturnType<typeof setTimeout> | null = null;
     private longPressStartX:   number = 0;
@@ -382,6 +385,24 @@ class EasyNoteView extends ItemView {
     private _autoPeriodicSaveTimer:   ReturnType<typeof setInterval> | null = null; // 定時 auto-save
     private autoPeriodicSaveBtn!:     HTMLButtonElement;
     private static readonly AUTOSAVE_FILENAME    = 'EasyNote-autosave.enote';
+
+    // 黑色自訂 CSS cursor（text I-beam 與 pan hand，避免在白畫布上隱形）
+    private static readonly CURSOR_TEXT = (() => {
+        const s = `<svg xmlns='http://www.w3.org/2000/svg' width='20' height='22'><line x1='10' y1='2' x2='10' y2='20' stroke='black' stroke-width='2'/><line x1='5' y1='2' x2='15' y2='2' stroke='black' stroke-width='2'/><line x1='5' y1='20' x2='15' y2='20' stroke='black' stroke-width='2'/><line x1='10' y1='2' x2='10' y2='20' stroke='white' stroke-width='0.5'/></svg>`;
+        return `url("data:image/svg+xml;utf8,${encodeURIComponent(s)}") 10 11, text`;
+    })();
+    private static readonly CURSOR_GRAB = (() => {
+        const s = `<svg xmlns='http://www.w3.org/2000/svg' width='22' height='22'><path d='M8 12V5a1.5 1.5 0 0 1 3 0v4M11 9V4a1.5 1.5 0 0 1 3 0v5M14 9.5V7a1.5 1.5 0 0 1 3 0v5.5c0 3-2 5-5 5s-5-2-5-5V10a1.5 1.5 0 0 1 3 0v2' stroke='black' stroke-width='1.5' fill='white' stroke-linejoin='round' stroke-linecap='round'/></svg>`;
+        return `url("data:image/svg+xml;utf8,${encodeURIComponent(s)}") 11 5, grab`;
+    })();
+    private static readonly CURSOR_GRABBING = (() => {
+        const s = `<svg xmlns='http://www.w3.org/2000/svg' width='22' height='22'><path d='M5 10.5a1.5 1.5 0 0 1 3 0v1M8 10a1.5 1.5 0 0 1 3 0v1.5M11 10a1.5 1.5 0 0 1 3 0v1.5M14 10.5a1.5 1.5 0 0 1 3 0V13c0 3-2 5-5 5s-5-2-5-5v-2.5' stroke='black' stroke-width='1.5' fill='white' stroke-linejoin='round' stroke-linecap='round'/></svg>`;
+        return `url("data:image/svg+xml;utf8,${encodeURIComponent(s)}") 11 11, grabbing`;
+    })();
+    private static readonly CURSOR_CROSSHAIR = (() => {
+        const s = `<svg xmlns='http://www.w3.org/2000/svg' width='21' height='21'><line x1='10' y1='0' x2='10' y2='21' stroke='white' stroke-width='3'/><line x1='0' y1='10' x2='21' y2='10' stroke='white' stroke-width='3'/><line x1='10' y1='0' x2='10' y2='21' stroke='black' stroke-width='1.5'/><line x1='0' y1='10' x2='21' y2='10' stroke='black' stroke-width='1.5'/></svg>`;
+        return `url("data:image/svg+xml;utf8,${encodeURIComponent(s)}") 10 10, crosshair`;
+    })();
 
     // 歷史記錄（Undo/Redo）
     private history:   HistoryEntry[] = [];
@@ -530,6 +551,7 @@ class EasyNoteView extends ItemView {
         document.removeEventListener('keydown', this._onKeyDown);
         document.removeEventListener('paste',   this._onPaste);
         window.removeEventListener('resize',    this._onResize);
+        if (this._cursorDot) { this._cursorDot.remove(); this._cursorDot = null; }
     }
 
     // ── 工具列建構 ────────────────────────────────────────────────────────────
@@ -949,6 +971,12 @@ class EasyNoteView extends ItemView {
 
         this.resizeCanvas();
 
+        // 自訂游標 dot（fixed overlay）
+        const dot = document.createElement('div');
+        dot.className = 'easynote-cursor-dot';
+        document.body.appendChild(dot);
+        this._cursorDot = dot;
+
         // 捲動時重新渲染可見 viewport（viewport culling 架構需要）
         this.canvasWrapper.addEventListener('scroll', () => {
             if (!this.drawing) this.render();
@@ -1000,7 +1028,7 @@ class EasyNoteView extends ItemView {
                 this.panStartY     = e.clientY;
                 this.panScrollLeft = this.canvasWrapper.scrollLeft;
                 this.panScrollTop  = this.canvasWrapper.scrollTop;
-                this.canvas.style.cursor = 'grabbing';
+                this.canvas.style.cursor = EasyNoteView.CURSOR_GRABBING;
                 return;
             }
             if (e.button !== 0) return;
@@ -1029,7 +1057,7 @@ class EasyNoteView extends ItemView {
                 this.panStartY     = e.clientY;
                 this.panScrollLeft = this.canvasWrapper.scrollLeft;
                 this.panScrollTop  = this.canvasWrapper.scrollTop;
-                this.canvas.style.cursor = 'grabbing';
+                this.canvas.style.cursor = EasyNoteView.CURSOR_GRABBING;
                 return;
             }
 
@@ -1294,6 +1322,9 @@ class EasyNoteView extends ItemView {
             if (this.activePointers.has(e.pointerId)) {
                 this.activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
             }
+
+            // 自訂游標 dot（draw 模式顯示筆刷顏色圓圈）
+            if (e.pointerType === 'mouse') this.updateCustomCursor(e);
 
             // 雙指（含）以上：pinch-to-zoom + 平移
             if (this.activePointers.size >= 2) {
@@ -1599,18 +1630,6 @@ class EasyNoteView extends ItemView {
                     this.paintStroke(this.prevX, this.prevY, cpx, cpy);
                     this.prevX = cpx; this.prevY = cpy;
                 }
-            } else if (!this.drawing && this.tool === 'draw' && this.eraser && this.settings.brushMode === 'stroke-layer') {
-                // stroke-layer 橡皮擦拖曳：滑過圖片圖層時刪除
-                for (let i = this.imageLayers.length - 1; i >= 0; i--) {
-                    if (this.pointInLayer(mx, my, this.imageLayers[i])) {
-                        this.pushHistory('橡皮擦（圖層）');
-                        this.imageLayers.splice(i, 1);
-                        this.selectedIdx = -1;
-                        this.render();
-                        this.scheduleAutosave();
-                        break;
-                    }
-                }
             } else if (this.tool === 'paintselect') {
                 if (this.paintFragDrag && this.paintFragment) {
                     const ds    = this.paintFragDrag;
@@ -1659,7 +1678,7 @@ class EasyNoteView extends ItemView {
                     } else if (this.pointInFrag(mx, my)) {
                         this.canvas.style.cursor = 'move';
                     } else {
-                        this.canvas.style.cursor = 'crosshair';
+                        this.canvas.style.cursor = EasyNoteView.CURSOR_CROSSHAIR;
                     }
                 }
             }
@@ -1701,7 +1720,7 @@ class EasyNoteView extends ItemView {
             }
             if (e.button === 1) {
                 this.isPanning = false;
-                this.canvas.style.cursor = this.tool === 'draw' ? 'crosshair' : (this.tool === 'text' ? 'text' : (this.tool === 'paintselect' ? 'crosshair' : (this.tool === 'pan' ? 'grab' : 'default')));
+                this.canvas.style.cursor = this.tool === 'draw' ? 'crosshair' : (this.tool === 'text' ? EasyNoteView.CURSOR_TEXT : (this.tool === 'paintselect' ? EasyNoteView.CURSOR_CROSSHAIR : (this.tool === 'pan' ? EasyNoteView.CURSOR_GRAB : 'default')));
                 return;
             }
             if (this.tool === 'paintselect') {
@@ -1775,6 +1794,9 @@ class EasyNoteView extends ItemView {
         });
         this.canvas.addEventListener('pointerleave', (e) => {
             if (e.pointerType !== 'mouse') return;  // 觸控滑出由 pointerup/cancel 處理
+            // 隱藏自訂游標 dot，還原系統游標
+            if (this._cursorDot) this._cursorDot.style.display = 'none';
+            if (this.tool === 'draw') this.canvas.style.cursor = '';
             this.isPanning     = false;
             if (this.drawing && this.settings.brushMode === 'stroke-layer' && !this.eraser) {
                 this.commitStrokeAsLayer();
@@ -2549,6 +2571,38 @@ class EasyNoteView extends ItemView {
         this.canvas.style.cursor = 'default';
     }
 
+    /** 更新自訂游標 dot 的位置與樣式（draw 模式下呼叫） */
+    private updateCustomCursor(e: MouseEvent): void {
+        const dot = this._cursorDot;
+        if (!dot) return;
+        if (this.tool !== 'draw') {
+            dot.style.display = 'none';
+            return;
+        }
+        // draw 工具：隱藏系統游標，顯示自訂 dot
+        this.canvas.style.cursor = 'none';
+        const r    = Math.max(4, (this.brushSize * this.zoom) / 2);
+        const size = r * 2;
+        dot.style.display = 'block';
+        dot.style.width   = `${size}px`;
+        dot.style.height  = `${size}px`;
+        dot.style.left    = `${e.clientX - r}px`;
+        dot.style.top     = `${e.clientY - r}px`;
+        if (this.eraser) {
+            if (this.settings.brushMode === 'stroke-layer') {
+                dot.style.border     = '2px dashed #ff4444';
+                dot.style.background = 'rgba(255,68,68,0.12)';
+            } else {
+                dot.style.border     = '2px dashed #333333';
+                dot.style.background = 'rgba(0,0,0,0.06)';
+            }
+        } else {
+            const color = this.colors[this.colorIdx] ?? '#000000';
+            dot.style.border     = `2px solid ${color}`;
+            dot.style.background = `${color}22`;
+        }
+    }
+
     // ── Wikilink 點擊偵測 ──────────────────────────────────────────────────────
     /** 回傳 (mx,my) 位置下的 [[wikilink]] noteName，無則 null */
     private getWikilinkAt(mx: number, my: number): string | null {
@@ -3239,18 +3293,18 @@ class EasyNoteView extends ItemView {
             this.textBtn.removeClass('active');
             this.eraserBtn.removeClass('active');
         } else if (t === 'text') {
-            this.canvas.style.cursor = 'text';
+            this.canvas.style.cursor = EasyNoteView.CURSOR_TEXT;
             this.textBtn.addClass('active');
             this.selectBtn.removeClass('active');
             this.eraserBtn.removeClass('active');
         } else { // paintselect
-            this.canvas.style.cursor = 'crosshair';
+            this.canvas.style.cursor = EasyNoteView.CURSOR_CROSSHAIR;
             this.selectBtn.removeClass('active');
             this.textBtn.removeClass('active');
             this.eraserBtn.removeClass('active');
         }
         if (t === 'pan') {
-            this.canvas.style.cursor = 'grab';
+            this.canvas.style.cursor = EasyNoteView.CURSOR_GRAB;
             this.selectBtn.removeClass('active');
             this.textBtn.removeClass('active');
             this.eraserBtn.removeClass('active');

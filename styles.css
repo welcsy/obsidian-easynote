@@ -368,6 +368,16 @@
     box-shadow:   0 2px 8px rgba(0,0,0,0.18);
 }
 
+/* 自訂游標 dot（fixed overlay，pointer-events:none 不攔截事件） */
+.easynote-cursor-dot {
+    position:       fixed;
+    display:        none;
+    pointer-events: none;
+    border-radius:  50%;
+    z-index:        99999;
+    box-sizing:     border-box;
+}
+
 /* 拖曳圖片進入時的提示框線 */
 .easynote-canvas.easynote-drag-over {
     outline:        3px dashed var(--interactive-accent);
