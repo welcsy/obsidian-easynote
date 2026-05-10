@@ -949,6 +949,11 @@ class EasyNoteView extends ItemView {
 
         this.resizeCanvas();
 
+        // 捲動時重新渲染可見 viewport（viewport culling 架構需要）
+        this.canvasWrapper.addEventListener('scroll', () => {
+            if (!this.drawing) this.render();
+        }, { passive: true });
+
         // ── 滑鼠事件 ──────────────────────────────────────────────────────────
         this.canvas.addEventListener('pointerdown', (e) => {
             this.activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -1909,6 +1914,9 @@ class EasyNoteView extends ItemView {
     // ── 合成渲染 ──────────────────────────────────────────────────────────────
 
     private render(clip?: { x: number; y: number; w: number; h: number }): void {
+        // 計算當前可見 viewport（畫布座標）；clip 優先，否則從捲動位置計算
+        const vp = clip ?? this.getViewportRect();
+
         if (clip) {
             // 項目區域渲染：僅清除 + 重繪可見 viewport，其餘區域像素不動
             const { x, y, w, h } = clip;
@@ -1925,9 +1933,11 @@ class EasyNoteView extends ItemView {
             this.ctx.fillStyle = '#ffffff';
             this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
         }
-        // 2. 圖片層（底部）
+        // 2. 圖片層（底部）— viewport culling
         for (const lay of this.imageLayers) {
             const rot = lay.rotation || 0;
+            const { minX, minY, maxX, maxY } = this.rotatedAABB(lay.x, lay.y, lay.w, lay.h, rot);
+            if (!this.aabbInViewport(vp, minX, minY, maxX, maxY)) continue;
             this.ctx.save();
             const cx = lay.x + lay.w / 2, cy = lay.y + lay.h / 2;
             this.ctx.translate(cx, cy);
@@ -1935,11 +1945,13 @@ class EasyNoteView extends ItemView {
             this.ctx.drawImage(lay.img, -lay.w / 2, -lay.h / 2, lay.w, lay.h);
             this.ctx.restore();
         }
-        // 2b. Markdown 圖層（圖片層上方）
+        // 2b. Markdown 圖層（圖片層上方）— viewport culling
         for (const ml of this.markdownLayers) {
+            const b   = this.mdBBox(ml);
             const rot = ml.rotation || 0;
+            const { minX, minY, maxX, maxY } = this.rotatedAABB(b.x, b.y, b.w, b.h, rot);
+            if (!this.aabbInViewport(vp, minX, minY, maxX, maxY)) continue;
             if (rot !== 0) {
-                const b  = this.mdBBox(ml);
                 const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
                 this.ctx.save();
                 this.ctx.translate(cx, cy);
@@ -1951,12 +1963,14 @@ class EasyNoteView extends ItemView {
                 ml._cachedH = this.drawMarkdownContent(this.ctx, ml);
             }
         }
-        // 3. 文字層（圖片上方，繪畫層下方）
+        // 3. 文字層（圖片上方，繪畫層下方）— viewport culling
         for (const tl of this.textLayers) {
-            this.ctx.save();
+            const b   = this.textBBox(tl);
             const rot = tl.rotation || 0;
+            const { minX, minY, maxX, maxY } = this.rotatedAABB(b.x, b.y, b.w, b.h, rot);
+            if (!this.aabbInViewport(vp, minX, minY, maxX, maxY)) continue;
+            this.ctx.save();
             if (rot !== 0) {
-                const b  = this.textBBox(tl);
                 const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
                 this.ctx.translate(cx, cy);
                 this.ctx.rotate(rot);
@@ -1990,13 +2004,26 @@ class EasyNoteView extends ItemView {
             }
             this.ctx.restore();
         }
-        // 4. 繪畫層（最上方）
+        // 4. 繪畫層（最上方）— 只繪製 viewport 對應的 paintCanvas 區域
         // 筆觸期間：使用小型 viewport cache 避免上傳 128MB+ 大畫布紋理
         if (this.drawing && this._vpCache) {
             this.ctx.drawImage(this._vpCache, this._vpCacheX, this._vpCacheY);
         } else {
-            // 一般情況：完整畫布合成（paintScale < 1 時自動拉伸回全畫布尺寸）
-            this.ctx.drawImage(this.paintCanvas, 0, 0, this.canvas.width, this.canvas.height);
+            // 僅複製 viewport 對應的 paintCanvas 區域，減少紋理上傳量
+            const PS   = this.paintScale;
+            const srcX = Math.max(0, Math.floor(vp.x * PS));
+            const srcY = Math.max(0, Math.floor(vp.y * PS));
+            const srcX2 = Math.min(this.paintCanvas.width,  Math.ceil((vp.x + vp.w) * PS));
+            const srcY2 = Math.min(this.paintCanvas.height, Math.ceil((vp.y + vp.h) * PS));
+            const srcW  = srcX2 - srcX;
+            const srcH  = srcY2 - srcY;
+            if (srcW > 0 && srcH > 0) {
+                this.ctx.drawImage(
+                    this.paintCanvas,
+                    srcX, srcY, srcW, srcH,
+                    srcX / PS, srcY / PS, srcW / PS, srcH / PS,
+                );
+            }
         }
         // 4a. 繪畫選取 fragment（繪畫層上方）
         if (this.paintFragment) {
@@ -2087,6 +2114,40 @@ class EasyNoteView extends ItemView {
         const c = Math.cos(rot), s = Math.sin(rot);
         return ([ [-hw, -hh], [hw, -hh], [-hw, hh], [hw, hh] ] as [number, number][]).map(
             ([lx, ly]) => [cx + lx * c - ly * s, cy + lx * s + ly * c] as [number, number]);
+    }
+
+    /** 旋轉矩形的軸對齊包圍盒（AABB） */
+    private rotatedAABB(x: number, y: number, w: number, h: number, rot: number):
+            { minX: number; minY: number; maxX: number; maxY: number } {
+        if (rot === 0) return { minX: x, minY: y, maxX: x + w, maxY: y + h };
+        const corners = this.rotatedCorners(x, y, w, h, rot);
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const [cx, cy] of corners) {
+            if (cx < minX) minX = cx; if (cx > maxX) maxX = cx;
+            if (cy < minY) minY = cy; if (cy > maxY) maxY = cy;
+        }
+        return { minX, minY, maxX, maxY };
+    }
+
+    /** 取得目前可見 viewport 的畫布座標矩形 */
+    private getViewportRect(): { x: number; y: number; w: number; h: number } {
+        const sl = this.canvasWrapper.scrollLeft;
+        const st = this.canvasWrapper.scrollTop;
+        return {
+            x: sl / this.zoom,
+            y: st / this.zoom,
+            w: this.canvasWrapper.clientWidth  / this.zoom,
+            h: this.canvasWrapper.clientHeight / this.zoom,
+        };
+    }
+
+    /** 判斷 AABB 是否與 viewport 矩形相交 */
+    private aabbInViewport(
+        vp: { x: number; y: number; w: number; h: number },
+        minX: number, minY: number, maxX: number, maxY: number,
+    ): boolean {
+        return maxX >= vp.x && minX <= vp.x + vp.w &&
+               maxY >= vp.y && minY <= vp.y + vp.h;
     }
 
     /** 點擊測試：考慮旋轉的矩形 */
@@ -4592,18 +4653,12 @@ class EasyNoteView extends ItemView {
             lines.push(``);
             lines.push(`> 匯出時間：${ts}`);
             lines.push(`> 畫布名稱：${this.lastProjectName || '（未命名）'}`);
+            lines.push(`> 畫布尺寸：${this.canvas.width} × ${this.canvas.height} px`);
+            lines.push(``);
+            lines.push(`---`);
             lines.push(``);
 
-            // 畫布尺寸
-            lines.push(`## 畫布`);
-            lines.push(``);
-            lines.push(`| 項目 | 值 |`);
-            lines.push(`|------|-----|`);
-            lines.push(`| 寬度 | ${this.canvas.width} px |`);
-            lines.push(`| 高度 | ${this.canvas.height} px |`);
-            lines.push(``);
-
-            // 插畫層（繪畫層）
+            // ── 插畫層 ──────────────────────────────────────────────────────
             const paintData = this.paintCtx.getImageData(
                 0, 0, this.paintCanvas.width, this.paintCanvas.height
             );
@@ -4613,93 +4668,168 @@ class EasyNoteView extends ItemView {
             }
             lines.push(`## 插畫層`);
             lines.push(``);
+            lines.push(`### 顯示部分`);
+            lines.push(``);
+            lines.push(`> 插畫層為整個畫布大小的單一矩形，viewport culling 以下列範圍判斷是否需要繪製。`);
+            lines.push(``);
             lines.push(`| 項目 | 值 |`);
             lines.push(`|------|-----|`);
-            lines.push(`| 畫布寬度 | ${this.paintCanvas.width} px |`);
-            lines.push(`| 畫布高度 | ${this.paintCanvas.height} px |`);
-            lines.push(`| 解析度縮放 | ${this.paintScale} (${this.paintScale === 1.0 ? '全解析度' : '效能模式'}) |`);
+            lines.push(`| 左上角 X | 0 |`);
+            lines.push(`| 左上角 Y | 0 |`);
+            lines.push(`| 右下角 X | ${this.canvas.width} |`);
+            lines.push(`| 右下角 Y | ${this.canvas.height} |`);
+            lines.push(``);
+            lines.push(`### 資訊部分`);
+            lines.push(``);
+            lines.push(`| 項目 | 值 |`);
+            lines.push(`|------|-----|`);
+            lines.push(`| 畫布寬度（含縮放） | ${this.paintCanvas.width} px |`);
+            lines.push(`| 畫布高度（含縮放） | ${this.paintCanvas.height} px |`);
+            lines.push(`| 解析度縮放 | ${this.paintScale}（${this.paintScale === 1.0 ? '全解析度' : '效能模式'}）|`);
             lines.push(`| 有筆畫內容 | ${hasContent ? '是' : '否'} |`);
             lines.push(``);
+            lines.push(`---`);
+            lines.push(``);
 
-            // 分離：筆觸圖層（stroke-layer 模式） vs 一般圖片圖層
-            const strokeLayers = this.imageLayers.filter(l => l.strokeName);
+            // ── 筆觸圖層（圖片模式）───────────────────────────────────────
+            const strokeLayers  = this.imageLayers.filter(l => l.strokeName);
             const imgOnlyLayers = this.imageLayers.filter(l => !l.strokeName);
 
-            // 筆觸圖層（圖層筆觸模式）
-            lines.push(`## 筆觸圖層——圖層筆觸模式（共 ${strokeLayers.length} 筆）`);
+            lines.push(`## 筆觸圖層——圖片模式（共 ${strokeLayers.length} 筆）`);
             lines.push(``);
             if (strokeLayers.length === 0) {
-                lines.push(`（無筆觸資料，需切換至「圖層筆觸」筆刷模式後繪製）`);
+                lines.push(`（無筆觸資料，需切換至「圖片模式」筆刷模式後繪製）`);
             } else {
-                lines.push(`| 筆觸名稱 | 左上角 X | 左上角 Y | 右下角 X | 右下角 Y | 寬 | 高 |`);
-                lines.push(`|----------|----------|----------|----------|----------|----|-----|`);
-                strokeLayers.forEach((lay) => {
-                    const x2 = lay.x + lay.w;
-                    const y2 = lay.y + lay.h;
-                    lines.push(`| ${lay.strokeName} | ${lay.x} | ${lay.y} | ${x2} | ${y2} | ${lay.w} | ${lay.h} |`);
-                });
+                lines.push(`### 顯示部分`);
+                lines.push(``);
+                lines.push(`> 筆觸圖層無旋轉，AABB 即原始矩形。`);
+                lines.push(``);
+                lines.push(`| 筆觸名稱 | 左上角 X | 左上角 Y | 右下角 X | 右下角 Y |`);
+                lines.push(`|----------|----------|----------|----------|----------|`);
+                for (const lay of strokeLayers) {
+                    lines.push(`| ${lay.strokeName} | ${lay.x} | ${lay.y} | ${lay.x + lay.w} | ${lay.y + lay.h} |`);
+                }
+                lines.push(``);
+                lines.push(`### 資訊部分`);
+                lines.push(``);
+                lines.push(`| 筆觸名稱 | 原始 X | 原始 Y | 寬 | 高 |`);
+                lines.push(`|----------|--------|--------|----|-----|`);
+                for (const lay of strokeLayers) {
+                    lines.push(`| ${lay.strokeName} | ${lay.x} | ${lay.y} | ${lay.w} | ${lay.h} |`);
+                }
             }
             lines.push(``);
+            lines.push(`---`);
+            lines.push(``);
 
-            // 一般圖片圖層（匯入的圖片，非筆觸）
+            // ── 圖片圖層（匯入圖片）────────────────────────────────────────
             lines.push(`## 圖片圖層（共 ${imgOnlyLayers.length} 個）`);
             lines.push(``);
             if (imgOnlyLayers.length === 0) {
                 lines.push(`（無）`);
             } else {
-                lines.push(`| # | X | Y | 寬 | 高 | 旋轉 |`);
-                lines.push(`|---|---|---|----|----|------|`);
+                lines.push(`### 顯示部分`);
+                lines.push(``);
+                lines.push(`> 以旋轉後的軸對齊包圍盒（AABB）判斷是否在 viewport 內。`);
+                lines.push(``);
+                lines.push(`| # | 左上角 X | 左上角 Y | 右下角 X | 右下角 Y |`);
+                lines.push(`|---|----------|----------|----------|----------|`);
                 imgOnlyLayers.forEach((lay, i) => {
-                    const rot = lay.rotation !== undefined ? `${lay.rotation.toFixed(2)} rad` : `0 rad`;
+                    const rot = lay.rotation || 0;
+                    const { minX, minY, maxX, maxY } = this.rotatedAABB(lay.x, lay.y, lay.w, lay.h, rot);
+                    lines.push(`| ${i + 1} | ${minX.toFixed(1)} | ${minY.toFixed(1)} | ${maxX.toFixed(1)} | ${maxY.toFixed(1)} |`);
+                });
+                lines.push(``);
+                lines.push(`### 資訊部分`);
+                lines.push(``);
+                lines.push(`| # | 原始 X | 原始 Y | 寬 | 高 | 旋轉 |`);
+                lines.push(`|---|--------|--------|----|-----|------|`);
+                imgOnlyLayers.forEach((lay, i) => {
+                    const rot = lay.rotation !== undefined ? `${lay.rotation.toFixed(4)} rad` : `0 rad`;
                     lines.push(`| ${i + 1} | ${lay.x} | ${lay.y} | ${lay.w} | ${lay.h} | ${rot} |`);
                 });
             }
             lines.push(``);
+            lines.push(`---`);
+            lines.push(``);
 
-            // 文字圖層
+            // ── 文字圖層 ──────────────────────────────────────────────────
             lines.push(`## 文字圖層（共 ${this.textLayers.length} 個）`);
             lines.push(``);
             if (this.textLayers.length === 0) {
                 lines.push(`（無）`);
             } else {
+                lines.push(`### 顯示部分`);
+                lines.push(``);
+                lines.push(`> 以文字包圍盒旋轉後的 AABB 判斷是否在 viewport 內。`);
+                lines.push(``);
+                lines.push(`| # | 左上角 X | 左上角 Y | 右下角 X | 右下角 Y |`);
+                lines.push(`|---|----------|----------|----------|----------|`);
                 this.textLayers.forEach((tl, i) => {
-                    lines.push(`### 文字 ${i + 1}`);
+                    const b = this.textBBox(tl);
+                    const rot = tl.rotation || 0;
+                    const { minX, minY, maxX, maxY } = this.rotatedAABB(b.x, b.y, b.w, b.h, rot);
+                    lines.push(`| ${i + 1} | ${minX.toFixed(1)} | ${minY.toFixed(1)} | ${maxX.toFixed(1)} | ${maxY.toFixed(1)} |`);
+                });
+                lines.push(``);
+                lines.push(`### 資訊部分`);
+                lines.push(``);
+                this.textLayers.forEach((tl, i) => {
+                    lines.push(`#### 文字 ${i + 1}`);
                     lines.push(``);
                     lines.push(`| 欄位 | 值 |`);
                     lines.push(`|------|-----|`);
-                    lines.push(`| 內容 | \`${tl.text.replace(/\n/g, '↵').replace(/\|/g, '\\|')}\` |`);
-                    lines.push(`| X | ${tl.x} |`);
-                    lines.push(`| Y | ${tl.y} |`);
+                    lines.push(`| 原始 X | ${tl.x} |`);
+                    lines.push(`| 原始 Y | ${tl.y} |`);
                     lines.push(`| 字體大小 | ${tl.fontSize} px |`);
                     lines.push(`| 顏色 | ${tl.color} |`);
-                    lines.push(`| 旋轉 | ${tl.rotation !== undefined ? `${tl.rotation.toFixed(2)} rad` : '0 rad'} |`);
-                    if (tl.linkedNotePath) {
-                        lines.push(`| 連結筆記 | [[${tl.linkedNotePath}]] |`);
-                    }
+                    lines.push(`| 旋轉 | ${tl.rotation !== undefined ? `${tl.rotation.toFixed(4)} rad` : '0 rad'} |`);
+                    if (tl.linkedNotePath) lines.push(`| 連結筆記 | [[${tl.linkedNotePath}]] |`);
+                    lines.push(``);
+                    lines.push(`**內容：**`);
+                    lines.push(``);
+                    lines.push(`\`\`\``);
+                    lines.push(tl.text);
+                    lines.push(`\`\`\``);
                     lines.push(``);
                 });
             }
+            lines.push(`---`);
+            lines.push(``);
 
-            // Markdown 圖層
+            // ── Markdown 圖層 ─────────────────────────────────────────────
             lines.push(`## Markdown 圖層（共 ${this.markdownLayers.length} 個）`);
             lines.push(``);
             if (this.markdownLayers.length === 0) {
                 lines.push(`（無）`);
             } else {
+                lines.push(`### 顯示部分`);
+                lines.push(``);
+                lines.push(`> 以 Markdown 包圍盒旋轉後的 AABB 判斷是否在 viewport 內。`);
+                lines.push(``);
+                lines.push(`| # | 左上角 X | 左上角 Y | 右下角 X | 右下角 Y |`);
+                lines.push(`|---|----------|----------|----------|----------|`);
                 this.markdownLayers.forEach((ml, i) => {
-                    lines.push(`### Markdown ${i + 1}`);
+                    const b = this.mdBBox(ml);
+                    const rot = ml.rotation || 0;
+                    const { minX, minY, maxX, maxY } = this.rotatedAABB(b.x, b.y, b.w, b.h, rot);
+                    lines.push(`| ${i + 1} | ${minX.toFixed(1)} | ${minY.toFixed(1)} | ${maxX.toFixed(1)} | ${maxY.toFixed(1)} |`);
+                });
+                lines.push(``);
+                lines.push(`### 資訊部分`);
+                lines.push(``);
+                this.markdownLayers.forEach((ml, i) => {
+                    lines.push(`#### Markdown ${i + 1}`);
                     lines.push(``);
                     lines.push(`| 欄位 | 值 |`);
                     lines.push(`|------|-----|`);
-                    lines.push(`| X | ${ml.x} |`);
-                    lines.push(`| Y | ${ml.y} |`);
+                    lines.push(`| 原始 X | ${ml.x} |`);
+                    lines.push(`| 原始 Y | ${ml.y} |`);
+                    lines.push(`| 欄位寬度 | ${ml.width} px |`);
                     lines.push(`| 字體大小 | ${ml.fontSize} px |`);
                     lines.push(`| 顏色 | ${ml.color} |`);
-                    lines.push(`| 寬度 | ${ml.width} px |`);
-                    lines.push(`| 旋轉 | ${ml.rotation !== undefined ? `${ml.rotation.toFixed(2)} rad` : '0 rad'} |`);
-                    if (ml.linkedNotePath) {
-                        lines.push(`| 連結筆記 | [[${ml.linkedNotePath}]] |`);
-                    }
+                    lines.push(`| 旋轉 | ${ml.rotation !== undefined ? `${ml.rotation.toFixed(4)} rad` : '0 rad'} |`);
+                    if (ml.linkedNotePath) lines.push(`| 連結筆記 | [[${ml.linkedNotePath}]] |`);
                     lines.push(``);
                     lines.push(`**內容：**`);
                     lines.push(``);
