@@ -879,6 +879,14 @@ class EasyNoteView extends ItemView {
             new SaveModal(this.app, defaultName, (name, fmt) => this.saveDrawing(name, fmt)).open();
         });
 
+        // 匯出圖層資訊（測試用）
+        const exportLayerBtn = canvasActions.createEl('button', {
+            cls:   'easynote-btn',
+            text:  '匯出圖層資訊',
+            title: '將畫布所有圖層資訊匯出成 .md 檔案（測試用）',
+        });
+        exportLayerBtn.addEventListener('click', () => this.exportLayerInfo());
+
         canvasActions.createEl('div', { cls: 'easynote-spacer' });
 
         // 定時 auto-sync 開關按鈕
@@ -4445,6 +4453,138 @@ class EasyNoteView extends ItemView {
         const [rhx, rhy] = this.rotateHandleWorldPos(b.x - 2, b.y - 2, b.w + 4, b.h + 4, rot);
         const topCx = (cnw[0] + cne[0]) / 2, topCy = (cnw[1] + cne[1]) / 2;
         this.drawRotateHandle(topCx, topCy, rhx, rhy, color);
+    }
+
+    // ── 匯出圖層資訊至 Vault (.md) ─────────────────────────────────────────────
+    async exportLayerInfo(): Promise<void> {
+        try {
+            const folder = normalizePath(this.settings.saveFolder);
+            if (!(await this.app.vault.adapter.exists(folder))) {
+                await this.app.vault.createFolder(folder);
+            }
+            const ts       = this.localTimestamp();
+            const baseName = this.lastProjectName ? `${this.lastProjectName}-layers` : `EasyNote-layers-${ts}`;
+            const filename = normalizePath(`${folder}/${baseName}.md`);
+
+            const lines: string[] = [];
+            lines.push(`# EasyNote 圖層資訊`);
+            lines.push(``);
+            lines.push(`> 匯出時間：${ts}`);
+            lines.push(`> 畫布名稱：${this.lastProjectName || '（未命名）'}`);
+            lines.push(``);
+
+            // 畫布尺寸
+            lines.push(`## 畫布`);
+            lines.push(``);
+            lines.push(`| 項目 | 值 |`);
+            lines.push(`|------|-----|`);
+            lines.push(`| 寬度 | ${this.canvas.width} px |`);
+            lines.push(`| 高度 | ${this.canvas.height} px |`);
+            lines.push(``);
+
+            // 插畫層（繪畫層）
+            const paintData = this.paintCtx.getImageData(
+                0, 0, this.paintCanvas.width, this.paintCanvas.height
+            );
+            let hasContent = false;
+            for (let i = 3; i < paintData.data.length; i += 4) {
+                if (paintData.data[i] > 0) { hasContent = true; break; }
+            }
+            lines.push(`## 插畫層`);
+            lines.push(``);
+            lines.push(`| 項目 | 值 |`);
+            lines.push(`|------|-----|`);
+            lines.push(`| 畫布寬度 | ${this.paintCanvas.width} px |`);
+            lines.push(`| 畫布高度 | ${this.paintCanvas.height} px |`);
+            lines.push(`| 解析度縮放 | ${this.paintScale} (${this.paintScale === 1.0 ? '全解析度' : '效能模式'}) |`);
+            lines.push(`| 有筆畫內容 | ${hasContent ? '是' : '否'} |`);
+            lines.push(``);
+
+            // 圖片圖層
+            lines.push(`## 圖片圖層（共 ${this.imageLayers.length} 個）`);
+            lines.push(``);
+            if (this.imageLayers.length === 0) {
+                lines.push(`（無）`);
+            } else {
+                lines.push(`| # | X | Y | 寬 | 高 | 旋轉 |`);
+                lines.push(`|---|---|---|----|----|------|`);
+                this.imageLayers.forEach((lay, i) => {
+                    const rot = lay.rotation !== undefined ? `${lay.rotation.toFixed(2)} rad` : `0 rad`;
+                    lines.push(`| ${i + 1} | ${lay.x} | ${lay.y} | ${lay.w} | ${lay.h} | ${rot} |`);
+                });
+            }
+            lines.push(``);
+
+            // 文字圖層
+            lines.push(`## 文字圖層（共 ${this.textLayers.length} 個）`);
+            lines.push(``);
+            if (this.textLayers.length === 0) {
+                lines.push(`（無）`);
+            } else {
+                this.textLayers.forEach((tl, i) => {
+                    lines.push(`### 文字 ${i + 1}`);
+                    lines.push(``);
+                    lines.push(`| 欄位 | 值 |`);
+                    lines.push(`|------|-----|`);
+                    lines.push(`| 內容 | \`${tl.text.replace(/\n/g, '↵').replace(/\|/g, '\\|')}\` |`);
+                    lines.push(`| X | ${tl.x} |`);
+                    lines.push(`| Y | ${tl.y} |`);
+                    lines.push(`| 字體大小 | ${tl.fontSize} px |`);
+                    lines.push(`| 顏色 | ${tl.color} |`);
+                    lines.push(`| 旋轉 | ${tl.rotation !== undefined ? `${tl.rotation.toFixed(2)} rad` : '0 rad'} |`);
+                    if (tl.linkedNotePath) {
+                        lines.push(`| 連結筆記 | [[${tl.linkedNotePath}]] |`);
+                    }
+                    lines.push(``);
+                });
+            }
+
+            // Markdown 圖層
+            lines.push(`## Markdown 圖層（共 ${this.markdownLayers.length} 個）`);
+            lines.push(``);
+            if (this.markdownLayers.length === 0) {
+                lines.push(`（無）`);
+            } else {
+                this.markdownLayers.forEach((ml, i) => {
+                    lines.push(`### Markdown ${i + 1}`);
+                    lines.push(``);
+                    lines.push(`| 欄位 | 值 |`);
+                    lines.push(`|------|-----|`);
+                    lines.push(`| X | ${ml.x} |`);
+                    lines.push(`| Y | ${ml.y} |`);
+                    lines.push(`| 字體大小 | ${ml.fontSize} px |`);
+                    lines.push(`| 顏色 | ${ml.color} |`);
+                    lines.push(`| 寬度 | ${ml.width} px |`);
+                    lines.push(`| 旋轉 | ${ml.rotation !== undefined ? `${ml.rotation.toFixed(2)} rad` : '0 rad'} |`);
+                    if (ml.linkedNotePath) {
+                        lines.push(`| 連結筆記 | [[${ml.linkedNotePath}]] |`);
+                    }
+                    lines.push(``);
+                    lines.push(`**內容：**`);
+                    lines.push(``);
+                    lines.push(`\`\`\``);
+                    lines.push(ml.text);
+                    lines.push(`\`\`\``);
+                    lines.push(``);
+                });
+            }
+
+            const content = lines.join('\n');
+            const bytes   = new TextEncoder().encode(content);
+
+            if (await this.app.vault.adapter.exists(filename)) {
+                const existing = this.app.vault.getAbstractFileByPath(filename);
+                if (existing instanceof TFile) {
+                    await this.app.vault.modifyBinary(existing, bytes.buffer as ArrayBuffer);
+                }
+            } else {
+                await this.app.vault.createBinary(filename, bytes.buffer as ArrayBuffer);
+            }
+            new Notice(`✓ 圖層資訊已匯出：${filename}`);
+        } catch (err) {
+            new Notice(`✗ 匯出失敗：${err}`);
+            console.error('[EasyNote] exportLayerInfo error:', err);
+        }
     }
 
     // ── 儲存至 Vault ──────────────────────────────────────────────────────────
