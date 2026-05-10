@@ -71,6 +71,201 @@ const COLORS: string[] = [
 ];
 const COLOR_NAMES: string[] = ['黑色', '紅色', '藍色', '綠色', '橘色'];
 
+// ─── i18n ─────────────────────────────────────────────────────────────────────
+type Lang = 'zh' | 'en';
+let _currentLang: Lang = 'zh';
+
+const TRANSLATIONS: Record<string, { zh: string; en: string }> = {
+    // ── Toolbar ──────────────────────────────────────────────────────────────
+    'tb.group.draw':    { zh: '插畫',   en: 'Drawing' },
+    'tb.group.text':    { zh: '文字',   en: 'Text' },
+    'tb.group.image':   { zh: '圖片',   en: 'Image' },
+    'tb.label.color':   { zh: '顏色:',  en: 'Color:' },
+    'tb.label.fontSize':{ zh: '字體:',  en: 'Font:' },
+    'tb.label.brush':   { zh: '筆刷:',  en: 'Brush:' },
+    'tb.label.opacity': { zh: '透明度:', en: 'Opacity:' },
+    'tb.eraser.title':  { zh: '橡皮擦（快捷：E）', en: 'Eraser (E)' },
+    'tb.paintSelect.title': {
+        zh: '框選繪畫層區塊，可移動/縮放後再合併（快捷：M）\nEnter 確認　Esc 取消　Del 刪除選取區塊',
+        en: 'Select paint region, move/scale then merge (M)\nEnter: confirm  Esc: cancel  Del: delete',
+    },
+    'tb.color.title':     { zh: '{0}（快捷：{1}）\n雙擊自訂顏色', en: '{0} ({1})\nDouble-click to customize' },
+    'tb.text.title':      { zh: '新增 / 編輯文字（快捷：T）', en: 'Add/Edit text (T)' },
+    'tb.fontSize.title':  { zh: '文字字體大小', en: 'Font size' },
+    'tb.textColor.title': { zh: '文字顏色', en: 'Text color' },
+    'tb.select.title':    { zh: '選取並移動/縮放圖片（快捷：S）\nDel 刪除選取圖片', en: 'Select/move/scale image (S)\nDel: delete' },
+    'tb.loadLocal':       { zh: '載入本機圖片', en: 'Load Local Image' },
+    'tb.loadLocal.title': { zh: '從本機載入圖片（也可拖曳或 Ctrl+V）', en: 'Load from device (or drag & drop / Ctrl+V)' },
+    'tb.loadVault':       { zh: '載入Obsidian圖片', en: 'Load Vault Image' },
+    'tb.loadVault.title': { zh: '從 Vault 中選取圖片', en: 'Select image from Vault' },
+    'tb.loadNote':        { zh: '載入筆記', en: 'Load Note' },
+    'tb.loadNote.title':  { zh: '將 Vault .md 筆記以 Markdown 圖層載入（每次開啟自動更新）', en: 'Load .md note as Markdown layer (auto-updates on open)' },
+    'tb.pan.title':       { zh: '平移鎖定：拖曳與縮放畫布，不會誤觸任何圖層', en: 'Pan mode: drag & zoom canvas without touching layers' },
+    'tb.undo.title':      { zh: '上一步 (Ctrl+Z)', en: 'Undo (Ctrl+Z)' },
+    'tb.undoSelect.title':{ zh: '選擇要回到哪一步', en: 'Choose undo step' },
+    'tb.redo.title':      { zh: '下一步 (Ctrl+Y)', en: 'Redo (Ctrl+Y)' },
+    'tb.redoSelect.title':{ zh: '選擇要唤復哪一步', en: 'Choose redo step' },
+    'tb.newCanvas':       { zh: '開啟新畫布', en: 'New Canvas' },
+    'tb.newCanvas.title': { zh: '清空所有圖層，開始全新畫布（不可復原）', en: 'Clear all layers and start fresh (irreversible)' },
+    'tb.canvasSize':      { zh: '畫布大小', en: 'Canvas Size' },
+    'tb.canvasSize.title':{ zh: '調整畫布尺寸（現有內容保留）', en: 'Resize canvas (existing content preserved)' },
+    'tb.saveProject':     { zh: '儲存畫布', en: 'Save Canvas' },
+    'tb.saveProject.title':{ zh: '儲存可繼續編輯的 .enote 專案檔', en: 'Save as editable .enote project file' },
+    'tb.loadProject':     { zh: '載入畫布', en: 'Load Canvas' },
+    'tb.loadProject.title':{ zh: '從 Vault 載入 .enote 專案檔', en: 'Load .enote project from Vault' },
+    'tb.export':          { zh: '匯出', en: 'Export' },
+    'tb.export.title':    { zh: '將手繪圖儲存到 Vault', en: 'Export drawing to Vault' },
+    'tb.exportLayers':    { zh: '匯出圖層資訊', en: 'Export Layer Info' },
+    'tb.exportLayers.title':{ zh: '將畫布所有圖層資訊匯出成 .md 檔案（測試用）', en: 'Export all layer info as .md (debug)' },
+    'tb.autoSync.title':  { zh: '定時自動重新載入開關', en: 'Toggle auto-reload' },
+    'tb.autoSave.title':  { zh: '定時自動儲存開關', en: 'Toggle periodic auto-save' },
+    // ── Status bar ────────────────────────────────────────────────────────────
+    'status.step':         { zh: '第{0}階({1}px)', en: 'Step {0} ({1}px)' },
+    'status.layer.text':   { zh: '文字層', en: 'Text Layer' },
+    'status.layer.image':  { zh: '圖片層', en: 'Image Layer' },
+    'status.layer.draw':   { zh: '插畫層', en: 'Drawing Layer' },
+    'status.autoSync.on':  { zh: '定時重新載入：開啟（每 {0} 秒）', en: 'Auto-reload: ON (every {0}s)' },
+    'status.autoSync.off': { zh: '定時重新載入：關閉', en: 'Auto-reload: OFF' },
+    'status.autoSave.on':  { zh: '定時儲存：開啟（每 {0} 秒）', en: 'Periodic save: ON (every {0}s)' },
+    'status.autoSave.off': { zh: '定時儲存：關閉', en: 'Periodic save: OFF' },
+    'status.selectMode':   { zh: '選取模式', en: 'Select Mode' },
+    'status.zoom':         { zh: '縮放', en: 'Zoom' },
+    'status.autosave':     { zh: '暫存', en: 'Autosave' },
+    'status.waiting':      { zh: '等待中', en: 'Waiting' },
+    'status.images':       { zh: '圖片', en: 'Images' },
+    'status.texts':        { zh: '文字', en: 'Text' },
+    'status.toolText':     { zh: '工具: 文字', en: 'Tool: Text' },
+    'status.font':         { zh: '字體', en: 'Font' },
+    'status.toolPaintSel': { zh: '工具: 繪畫選取', en: 'Tool: Paint Select' },
+    'status.hasFrag':      { zh: '已選取區塊', en: 'Region selected' },
+    'status.paintHint':    { zh: 'Enter 確認　Esc 取消　Del 棄用', en: 'Enter: confirm  Esc: cancel  Del: discard' },
+    'status.tool':         { zh: '工具', en: 'Tool' },
+    'status.size':         { zh: '大小', en: 'Size' },
+    'status.opacity':      { zh: '透明度', en: 'Opacity' },
+    'status.eraser':       { zh: '橡皮擦', en: 'Eraser' },
+    'status.pencil':       { zh: '鉛筆', en: 'Pencil' },
+    // ── Confirm dialogs ────────────────────────────────────────────────────────
+    'confirm.newCanvas': {
+        zh: '確定要開啟新畫布嗎？目前所有內容將被清除，此操作無法復原。',
+        en: 'Open new canvas? All current content will be cleared. This cannot be undone.',
+    },
+    // ── SaveModal ──────────────────────────────────────────────────────────────
+    'modal.save.title':        { zh: '儲存圖片',  en: 'Export Image' },
+    'modal.save.filename':     { zh: '檔案名稱',  en: 'File Name' },
+    'modal.save.filenameDesc': { zh: '不需要加副檔名', en: 'No file extension needed' },
+    'modal.save.format':       { zh: '檔案格式',  en: 'Format' },
+    'modal.save.png':          { zh: 'PNG（無損，支援透明）', en: 'PNG (lossless, transparent)' },
+    'modal.save.jpg':          { zh: 'JPG（較小，不透明）', en: 'JPG (smaller, no transparency)' },
+    'modal.save.webp':         { zh: 'WebP（高壓縮，支援透明）', en: 'WebP (compressed, transparent)' },
+    'modal.save.save':         { zh: '儲存', en: 'Save' },
+    'modal.save.cancel':       { zh: '取消', en: 'Cancel' },
+    // ── CanvasSizeModal ────────────────────────────────────────────────────────
+    'modal.canvasSize.title':  { zh: '設定畫布大小', en: 'Canvas Size' },
+    'modal.canvasSize.hint':   { zh: '目前：{0} × {1}　（現有內容會保留在左上角）', en: 'Current: {0} × {1}  (content preserved at top-left)' },
+    'modal.canvasSize.w2':     { zh: '×2 寬', en: '×2 W' },
+    'modal.canvasSize.h2':     { zh: '×2 高', en: '×2 H' },
+    'modal.canvasSize.all2':   { zh: '×2 全', en: '×2 Both' },
+    'modal.canvasSize.apply':  { zh: '套用', en: 'Apply' },
+    'modal.canvasSize.close':  { zh: '關閉', en: 'Close' },
+    // ── ProjectNameModal ────────────────────────────────────────────────────────
+    'modal.project.title':  { zh: '儲存專案', en: 'Save Project' },
+    'modal.project.name':   { zh: '專案名稱', en: 'Project Name' },
+    'modal.project.desc':   { zh: '儲存為 .enote 格式，可下次繼續編輯', en: 'Saves as .enote format for future editing' },
+    'modal.project.save':   { zh: '儲存', en: 'Save' },
+    'modal.project.cancel': { zh: '取消', en: 'Cancel' },
+    // ── VaultProjectPickerModal ─────────────────────────────────────────────────
+    'modal.vaultProject.title':  { zh: '載入 .enote 專案', en: 'Load .enote Project' },
+    'modal.vaultProject.search': { zh: '搜尋專案名稱…', en: 'Search project name…' },
+    'modal.vaultProject.empty':  { zh: '找不到 .enote 檔案', en: 'No .enote files found' },
+    // ── VaultImagePickerModal ────────────────────────────────────────────────────
+    'modal.vaultImage.title':      { zh: '選擇 Vault 圖片', en: 'Select Vault Image' },
+    'modal.vaultImage.search':     { zh: '搜尋圖片檔名…', en: 'Search image name…' },
+    'modal.vaultImage.allFolders': { zh: '全部', en: 'All' },
+    'modal.vaultImage.rootFolder': { zh: '根目錄', en: 'Root' },
+    'modal.vaultImage.empty':      { zh: '找不到符合的圖片', en: 'No matching images found' },
+    // ── VaultNotePickerModal ─────────────────────────────────────────────────────
+    'modal.vaultNote.title':  { zh: '連結 .md 筆記為文字圖層', en: 'Link .md Note as Layer' },
+    'modal.vaultNote.hint':   { zh: '選擇筆記後，內容會以原始 Markdown 顯示。每次重新開啟 EasyNote 會自動重新讀取筆記最新內容。', en: 'The note content will be displayed as raw Markdown. Content is refreshed each time EasyNote opens.' },
+    'modal.vaultNote.search': { zh: '搜尋筆記名稱…', en: 'Search note name…' },
+    'modal.vaultNote.empty':  { zh: '找不到 .md 筆記', en: 'No .md notes found' },
+    // ── Settings tab ────────────────────────────────────────────────────────────
+    'settings.title':          { zh: 'EasyNote 設定', en: 'EasyNote Settings' },
+    'settings.language':       { zh: '語系', en: 'Language' },
+    'settings.language.desc':  { zh: '選擇介面語言（重新開啟 EasyNote 畫布後工具列完全生效）', en: 'Select interface language (reopen EasyNote canvas for full toolbar effect)' },
+    'settings.language.zh':    { zh: '繁體中文', en: 'Traditional Chinese' },
+    'settings.language.en':    { zh: 'English', en: 'English' },
+    'settings.color':          { zh: '預設顏色', en: 'Default Color' },
+    'settings.color.desc':     { zh: '開啟 EasyNote 時的預設畫筆顏色', en: 'Default pen color when opening EasyNote' },
+    'settings.brushMode':      { zh: '筆刷模式', en: 'Brush Mode' },
+    'settings.brushMode.desc': { zh: '單點模式：每一筆直接畫在繪畫層（傳統像素繪製）；圖片模式：每一筆畫完後自動成為可選取/刪除的圖片圖層，橡皮擦改為點選刪除', en: 'Pixel mode: each stroke draws directly on the paint layer; Image mode: each stroke becomes a selectable image layer, eraser clicks to delete' },
+    'settings.brushMode.pixel':       { zh: '單點模式', en: 'Pixel Mode' },
+    'settings.brushMode.strokeLayer': { zh: '圖片模式', en: 'Image Mode' },
+    'settings.brushSizeMode':      { zh: '筆刷大小模式', en: 'Brush Size Mode' },
+    'settings.brushSizeMode.desc': { zh: '7 階：固定 7 個大小等級（快速切換）；連續：自由調整 1–60px', en: 'Steps: 7 fixed size levels (quick switch); Continuous: free 1–60px' },
+    'settings.brushSizeMode.steps':      { zh: '7 階', en: '7 Steps' },
+    'settings.brushSizeMode.continuous': { zh: '連續', en: 'Continuous' },
+    'settings.defaultBrushSize':         { zh: '預設筆刷大小', en: 'Default Brush Size' },
+    'settings.defaultBrushSize.stepsDesc':{ zh: '開啟 EasyNote 時的預設筆刷階數（7 階）', en: 'Default brush step when opening EasyNote (7 steps)' },
+    'settings.defaultBrushSize.desc':    { zh: '開啟 EasyNote 時的預設筆刷大小（{0}–{1}px）', en: 'Default brush size when opening EasyNote ({0}–{1}px)' },
+    'settings.defaultBrushSize.stepsHint':{ zh: '7 階對應大小: {0}', en: '7 step sizes: {0}' },
+    'settings.defaultBrushSize.stepsItem':{ zh: '第{0}階={1}px', en: 'Step {0}={1}px' },
+    'settings.colors.title': { zh: '預設五色筆顏色', en: 'Default 5 Pen Colors' },
+    'settings.colors.1':     { zh: '顏色 1（黑）', en: 'Color 1 (Black)' },
+    'settings.colors.2':     { zh: '顏色 2（紅）', en: 'Color 2 (Red)' },
+    'settings.colors.3':     { zh: '顏色 3（藍）', en: 'Color 3 (Blue)' },
+    'settings.colors.4':     { zh: '顏色 4（綠）', en: 'Color 4 (Green)' },
+    'settings.colors.5':     { zh: '顏色 5（橘）', en: 'Color 5 (Orange)' },
+    'settings.startupMode':        { zh: '啟動畫布模式', en: 'Startup Mode' },
+    'settings.startupMode.desc':   { zh: '開啟 EasyNote 時要呼叫前一次的畫布，還是呼叫對新畫布？選択「呼叫新畫布」時，關閉時會刪除自動暫存檔。', en: 'Choose whether to restore the previous canvas or start a new one. Selecting "New Canvas" deletes the autosave file on close.' },
+    'settings.startupMode.new':    { zh: '呼叫新畫布（預設）', en: 'New Canvas (default)' },
+    'settings.startupMode.previous':{ zh: '打開前一次', en: 'Open Previous' },
+    'settings.canvasWidth':        { zh: '預設畫布寬度（px）', en: 'Default Canvas Width (px)' },
+    'settings.canvasWidth.desc':   { zh: '新畫布的初始寬度（像素），預設 1920', en: 'Initial width for new canvas (pixels), default 1920' },
+    'settings.canvasHeight':       { zh: '預設畫布高度（px）', en: 'Default Canvas Height (px)' },
+    'settings.canvasHeight.desc':  { zh: '新畫布的初始高度（像素），預設 1080', en: 'Initial height for new canvas (pixels), default 1080' },
+    'settings.paintScale':         { zh: '筆觸解析度', en: 'Stroke Resolution' },
+    'settings.paintScale.desc':    { zh: '降低可大幅提升大畫布（8K 等）效能，但筆觸邊緣在縮放後會略微模糊。更改後需重新開啟畫布才生效。', en: 'Lower resolution improves performance on large canvases (8K+), but edges may appear slightly blurred. Reopen canvas to apply.' },
+    'settings.paintScale.1':       { zh: '1× 完整解析度（預設）', en: '1× Full Resolution (default)' },
+    'settings.paintScale.075':     { zh: '0.75× 較佳效能', en: '0.75× Better Performance' },
+    'settings.paintScale.05':      { zh: '0.5× 高效能（推薦大畫布）', en: '0.5× High Performance (large canvas)' },
+    'settings.paintScale.025':     { zh: '0.25× 最高效能', en: '0.25× Maximum Performance' },
+    'settings.timezone':           { zh: '時區', en: 'Timezone' },
+    'settings.timezone.desc':      { zh: '儲存檔名使用的時區（IANA 格式，例如 Asia/Taipei、America/New_York、Europe/London）', en: 'Timezone for file naming (IANA format, e.g. Asia/Taipei, America/New_York, Europe/London)' },
+    'settings.autoSync':           { zh: '定時自動重新載入', en: 'Periodic Auto-Reload' },
+    'settings.autoSync.desc':      { zh: '開啟後，畫布會依照設定的間隔定時自動重新載入目前畫布檔（工具列按鈕也可即時切換），沒有檔名時不作動', en: 'When enabled, the canvas reloads at the set interval. Toolbar button also toggles this. No effect without a file name.' },
+    'settings.autoSyncPeriod':     { zh: '自動重新載入間隔（秒）', en: 'Auto-Reload Interval (sec)' },
+    'settings.autoSyncPeriod.desc':{ zh: '定時自動重新載入的間隔秒數，最短 1 秒', en: 'Reload interval in seconds, minimum 1 second' },
+    'settings.autoSave':           { zh: '定時自動儲存', en: 'Periodic Auto-Save' },
+    'settings.autoSave.desc':      { zh: '開啟後，畫布會依照設定的間隔定時自動儲存（工具列按鈕也可即時切換）', en: 'When enabled, the canvas saves at the set interval. Toolbar button also toggles this.' },
+    'settings.autoSavePeriod':     { zh: '自動儲存間隔（秒）', en: 'Auto-Save Interval (sec)' },
+    'settings.autoSavePeriod.desc':{ zh: '定時自動儲存的間隔秒數，最短 1 秒', en: 'Save interval in seconds, minimum 1 second' },
+    'settings.saveFolder':         { zh: '儲存資料夾', en: 'Save Folder' },
+    'settings.saveFolder.desc':    { zh: '點擊「儲存 PNG」後，手繪圖存入 Vault 的哪個資料夾', en: 'Vault folder where exported drawings are saved' },
+    'settings.gdrive.title':       { zh: 'Google Drive 同步', en: 'Google Drive Sync' },
+    'settings.gdrive.desc':        { zh: '自動儲存時同步上傳到 Google Drive，自動載入時從 Google Drive 下載（同步資料夾：EasyNote-Sync）。', en: 'Auto-upload to Google Drive on save and auto-download on load (folder: EasyNote-Sync).' },
+    'settings.gdrive.uriInfo':     { zh: '<b>桌面版</b>請在 Google Cloud Console → 憑證 → OAuth 2.0 用戶端 → 「已授權的重新導向 URI」新增：<br>{desktopCode}<br><b>行動版（Android / iOS）</b>另需新增：<br>{mobileCode}<br>（若用戶端類型已選「桌面應用程式」則以上皆自動允許，無需手動新增）', en: '<b>Desktop</b>: In Google Cloud Console → Credentials → OAuth 2.0 Client → "Authorized redirect URIs", add:<br>{desktopCode}<br><b>Mobile (Android / iOS)</b>: Also add:<br>{mobileCode}<br>(If client type is "Desktop app", both are allowed automatically.)' },
+    'settings.gdrive.enable':      { zh: '啟用 Google Drive 同步', en: 'Enable Google Drive Sync' },
+    'settings.gdrive.enable.desc': { zh: '開啟後，自動儲存時同步上傳到 Google Drive，自動載入時從 Google Drive 下載。', en: 'When enabled, uploads on auto-save and downloads on auto-load.' },
+    'settings.gdrive.status':      { zh: 'Google Drive 連線狀態', en: 'Google Drive Connection' },
+    'settings.gdrive.connected':   { zh: '✓ 已連線 Google Drive（同步資料夾：EasyNote-Sync）', en: '✓ Connected to Google Drive (folder: EasyNote-Sync)' },
+    'settings.gdrive.notConnected':{ zh: '尚未連線，請點擊「連線 Google Drive」並在瀏覽器中登入 Google 帳戶。', en: 'Not connected. Click "Connect Google Drive" and sign in with your Google account.' },
+    'settings.gdrive.connect':     { zh: '連線 Google Drive', en: 'Connect Google Drive' },
+    'settings.gdrive.reconnect':   { zh: '重新授權', en: 'Reconnect' },
+    'settings.gdrive.disconnect':  { zh: '中斷連線', en: 'Disconnect' },
+    // ── Color names ──────────────────────────────────────────────────────────
+    'color.0': { zh: '黑色', en: 'Black' },
+    'color.1': { zh: '紅色', en: 'Red' },
+    'color.2': { zh: '藍色', en: 'Blue' },
+    'color.3': { zh: '綠色', en: 'Green' },
+    'color.4': { zh: '橘色', en: 'Orange' },
+};
+
+function t(key: string, ...args: (string | number)[]): string {
+    let s = TRANSLATIONS[key]?.[_currentLang] ?? TRANSLATIONS[key]?.zh ?? key;
+    args.forEach((a, i) => { s = s.replace(`{${i}}`, String(a)); });
+    return s;
+}
+
 // ─── 型別 ─────────────────────────────────────────────────────────────────────
 interface EasyNoteSettings {
     defaultColorIdx:  number;
@@ -94,6 +289,8 @@ interface EasyNoteSettings {
     googleAccessToken:     string;
     googleTokenExpiry:     number;
     googleDriveFolderId:   string;
+    // 介面語言
+    language?: 'zh' | 'en';
 }
 const DEFAULT_SETTINGS: EasyNoteSettings = {
     defaultColorIdx:  0,
@@ -116,6 +313,7 @@ const DEFAULT_SETTINGS: EasyNoteSettings = {
     googleAccessToken:     '',
     googleTokenExpiry:     0,
     googleDriveFolderId:   '',
+    language:              'zh',
 };
 
 // ─── .enote 專案格式 ──────────────────────────────────────────────────────────
@@ -561,12 +759,12 @@ class EasyNoteView extends ItemView {
         const row2 = bar.createEl('div',  { cls: 'easynote-toolbar-row' });
 
         // ── 插畫 群組 ────────────────────────────────────────────────────────
-        row1.createEl('span', { cls: 'easynote-group-label', text: '插畫' });
+        row1.createEl('span', { cls: 'easynote-group-label', text: t('tb.group.draw') });
 
         // 橡皮擦（快捷 E）
         this.eraserBtn = row1.createEl('button', {
             cls:   'easynote-btn easynote-btn-icon',
-            title: '橡皮擦（快捷：E）',
+            title: t('tb.eraser.title'),
         });
         setIcon(this.eraserBtn, 'eraser');
         this.eraserBtn.addEventListener('click', () => this.toggleEraser());
@@ -574,7 +772,7 @@ class EasyNoteView extends ItemView {
         // 繪畫選取工具（快捷 M）
         this.paintSelectBtn = row1.createEl('button', {
             cls:   'easynote-btn easynote-btn-icon',
-            title: '框選繪畫層區塊，可移動/縮放後再合併（快捷：M）\nEnter 確認　Esc 取消　Del 刪除選取區塊',
+            title: t('tb.paintSelect.title'),
         });
         setIcon(this.paintSelectBtn, 'move');
         this.paintSelectBtn.addEventListener('click', () => this.setTool('paintselect'));
@@ -582,15 +780,14 @@ class EasyNoteView extends ItemView {
         row1.createEl('div', { cls: 'easynote-sep' });
 
         // 色彩按鈕（單擊選色 / 雙擊開啟顏色選擇器 快捷 1~5）
-        row1.createEl('span', { cls: 'easynote-label', text: '顏色:' });
+        row1.createEl('span', { cls: 'easynote-label', text: t('tb.label.color') });
         this.colorBtns = [];
         for (let i = 0; i < this.colors.length; i++) {
             const wrapper = row1.createEl('div', { cls: 'easynote-color-wrapper' });
 
             const btn = wrapper.createEl('div', {
                 cls:   'easynote-color-btn',
-                title: `${this.colorNames[i]}（快捷：${i + 1}）
-雙擊自訂顏色`,
+                title: t('tb.color.title', t(`color.${i}`), String(i + 1)),
             });
             (btn as HTMLElement).style.background = this.colors[i];
             // 單擊 / 單點 → 選色
@@ -674,24 +871,24 @@ class EasyNoteView extends ItemView {
         row1.createEl('div', { cls: 'easynote-sep' });
 
         // ── 文字 群組 ────────────────────────────────────────────────────────
-        row1.createEl('span', { cls: 'easynote-group-label', text: '文字' });
+        row1.createEl('span', { cls: 'easynote-group-label', text: t('tb.group.text') });
 
         // 文字工具（快捷 T）
         this.textBtn = row1.createEl('button', {
             cls:   'easynote-btn easynote-btn-icon',
-            title: '新增 / 編輯文字（快捷：T）',
+            title: t('tb.text.title'),
         });
         setIcon(this.textBtn, 'type');
         this.textBtn.addEventListener('click', () => this.setTool('text'));
 
         // 字體大小
-        row1.createEl('span', { cls: 'easynote-label', text: '字體:' });
+        row1.createEl('span', { cls: 'easynote-label', text: t('tb.label.fontSize') });
         this.fontSizeInput           = row1.createEl('input');
         this.fontSizeInput.type      = 'number';
         this.fontSizeInput.min       = '8';
         this.fontSizeInput.max       = '200';
         this.fontSizeInput.value     = String(this.textFontSize);
-        this.fontSizeInput.title     = '文字字體大小';
+        this.fontSizeInput.title     = t('tb.fontSize.title');
         this.fontSizeInput.className = 'easynote-font-size-input';
         this.fontSizeInput.addEventListener('input', () => {
             const v = parseInt(this.fontSizeInput.value);
@@ -706,11 +903,11 @@ class EasyNoteView extends ItemView {
         });
 
         // 文字顏色
-        row1.createEl('span', { cls: 'easynote-label', text: '顏色:' });
+        row1.createEl('span', { cls: 'easynote-label', text: t('tb.label.color') });
         this.textColorInput          = row1.createEl('input');
         this.textColorInput.type     = 'color';
         this.textColorInput.value    = this.colors[0];
-        this.textColorInput.title    = '文字顏色';
+        this.textColorInput.title    = t('tb.textColor.title');
         this.textColorInput.className = 'easynote-text-color-toolbar';
         this.textColorInput.addEventListener('input', () => {
             // 即時更新已選中的文字圖層顏色
@@ -724,12 +921,12 @@ class EasyNoteView extends ItemView {
 
         // ── 圖片 群組 ────────────────────────────────────────────────────────
         const imageGroup = row1.createEl('div', { cls: 'easynote-image-group-wrap' });
-        imageGroup.createEl('span', { cls: 'easynote-group-label', text: '圖片' });
+        imageGroup.createEl('span', { cls: 'easynote-group-label', text: t('tb.group.image') });
 
         // 選取工具（快捷 S）
         this.selectBtn = imageGroup.createEl('button', {
             cls:   'easynote-btn easynote-btn-icon',
-            title: '選取並移動/縮放圖片（快捷：S）\nDel 刪除選取圖片',
+            title: t('tb.select.title'),
         });
         setIcon(this.selectBtn, 'move');
         this.selectBtn.addEventListener('click', () => this.setTool('select'));
@@ -737,8 +934,8 @@ class EasyNoteView extends ItemView {
         // 載入本機圖片
         const loadBtn = imageGroup.createEl('button', {
             cls:   'easynote-btn',
-            text:  '載入本機圖片',
-            title: '從本機載入圖片（也可拖曳或 Ctrl+V）',
+            text:  t('tb.loadLocal'),
+            title: t('tb.loadLocal.title'),
         });
         loadBtn.addEventListener('click', () => this.fileInput.click());
 
@@ -755,8 +952,8 @@ class EasyNoteView extends ItemView {
         // 載入Obsidian圖片
         const vaultBtn = imageGroup.createEl('button', {
             cls:   'easynote-btn',
-            text:  '載入Obsidian圖片',
-            title: '從 Vault 中選取圖片',
+            text:  t('tb.loadVault'),
+            title: t('tb.loadVault.title'),
         });
         vaultBtn.addEventListener('click', () => {
             new VaultImagePickerModal(this.app, (file) => this.loadImageFromVault(file)).open();
@@ -765,8 +962,8 @@ class EasyNoteView extends ItemView {
         // 載入筆記
         const loadNoteBtn = imageGroup.createEl('button', {
             cls:   'easynote-btn',
-            text:  '載入筆記',
-            title: '將 Vault .md 筆記以 Markdown 圖層載入（每次開啟自動更新）',
+            text:  t('tb.loadNote'),
+            title: t('tb.loadNote.title'),
         });
         loadNoteBtn.addEventListener('click', () => {
             new VaultNotePickerModal(this.app, (file) => this.addLinkedMarkdownLayer(file)).open();
@@ -775,7 +972,7 @@ class EasyNoteView extends ItemView {
         // 平移鎖定工具（安全瀏覽，不會誤觸任何圖層）
         this.panLockBtn = imageGroup.createEl('button', {
             cls:   'easynote-btn easynote-btn-icon',
-            title: '平移鎖定：拖曳與縮放畫布，不會誤觸任何圖層',
+            title: t('tb.pan.title'),
         });
         setIcon(this.panLockBtn, 'hand');
         this.panLockBtn.addEventListener('click', () => this.setTool('pan'));
@@ -790,11 +987,11 @@ class EasyNoteView extends ItemView {
         const undoGroup = row2.createEl('div', { cls: 'easynote-history-group' });
         this.undoBtn = undoGroup.createEl('button', {
             cls:   'easynote-btn easynote-btn-icon',
-            title: '上一步 (Ctrl+Z)',
+            title: t('tb.undo.title'),
         });
         setIcon(this.undoBtn, 'undo-2');
         this.undoBtn.addEventListener('click', () => { this.undo(); this.refreshUndoRedo(); });
-        const undoArrow = undoGroup.createEl('button', { cls: 'easynote-history-arrow', title: '選擇要回到哪一步' });
+        const undoArrow = undoGroup.createEl('button', { cls: 'easynote-history-arrow', title: t('tb.undoSelect.title') });
         undoArrow.textContent = '▾';
         undoArrow.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -804,11 +1001,11 @@ class EasyNoteView extends ItemView {
         const redoGroup = row2.createEl('div', { cls: 'easynote-history-group' });
         this.redoBtn = redoGroup.createEl('button', {
             cls:   'easynote-btn easynote-btn-icon',
-            title: '下一步 (Ctrl+Y)',
+            title: t('tb.redo.title'),
         });
         setIcon(this.redoBtn, 'redo-2');
         this.redoBtn.addEventListener('click', () => { this.redo(); this.refreshUndoRedo(); });
-        const redoArrow = redoGroup.createEl('button', { cls: 'easynote-history-arrow', title: '選擇要唤復哪一步' });
+        const redoArrow = redoGroup.createEl('button', { cls: 'easynote-history-arrow', title: t('tb.redoSelect.title') });
         redoArrow.textContent = '▾';
         redoArrow.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -818,7 +1015,7 @@ class EasyNoteView extends ItemView {
         row2.createEl('div', { cls: 'easynote-sep' });
 
         // 筆刷滑桿
-        row2.createEl('span', { cls: 'easynote-label', text: '筆刷:' });
+        row2.createEl('span', { cls: 'easynote-label', text: t('tb.label.brush') });
         this.sizeSlider           = row2.createEl('input');
         this.sizeSlider.type      = 'range';
         this.sizeSlider.step      = '1';
@@ -845,7 +1042,7 @@ class EasyNoteView extends ItemView {
         });
 
         // 透明度滑桿
-        row2.createEl('span', { cls: 'easynote-label', text: '透明度:' });
+        row2.createEl('span', { cls: 'easynote-label', text: t('tb.label.opacity') });
         this.opacitySlider           = row2.createEl('input');
         this.opacitySlider.type      = 'range';
         this.opacitySlider.min       = '1';
@@ -865,8 +1062,8 @@ class EasyNoteView extends ItemView {
         // 開啟新畫布
         const newCanvasBtn = canvasActions.createEl('button', {
             cls:   'easynote-btn',
-            text:  '開啟新畫布',
-            title: '清空所有圖層，開始全新畫布（不可復原）',
+            text:  t('tb.newCanvas'),
+            title: t('tb.newCanvas.title'),
         });
         newCanvasBtn.addEventListener('click', () => {
             const hasContent = this.imageLayers.length > 0
@@ -878,7 +1075,7 @@ class EasyNoteView extends ItemView {
                     return false;
                 })();
             if (hasContent || this.history.length > 0) {
-                const confirmed = confirm('確定要開啟新畫布嗎？目前所有內容將被清除，此操作無法復原。');
+                const confirmed = confirm(t('confirm.newCanvas'));
                 if (!confirmed) return;
             }
             this.clearCanvas();
@@ -894,8 +1091,8 @@ class EasyNoteView extends ItemView {
         // 畫布大小（直立模式下與儲存/載入/匯出同列）
         const canvasSizeBtn = canvasActions.createEl('button', {
             cls:   'easynote-btn',
-            text:  '畫布大小',
-            title: '調整畫布尺寸（現有內容保留）',
+            text:  t('tb.canvasSize'),
+            title: t('tb.canvasSize.title'),
         });
         canvasSizeBtn.addEventListener('click', () => {
             new CanvasSizeModal(this.app, this.canvas.width, this.canvas.height,
@@ -906,8 +1103,8 @@ class EasyNoteView extends ItemView {
         // 儲存專案 (.enote)
         const saveProjectBtn = canvasActions.createEl('button', {
             cls:   'easynote-btn',
-            text:  '儲存畫布',
-            title: '儲存可繼續編輯的 .enote 專案檔',
+            text:  t('tb.saveProject'),
+            title: t('tb.saveProject.title'),
         });
         saveProjectBtn.addEventListener('click', () => {
             const ts = this.localTimestamp();
@@ -918,8 +1115,8 @@ class EasyNoteView extends ItemView {
         // 載入專案 (.enote)
         const loadProjectBtn = canvasActions.createEl('button', {
             cls:   'easynote-btn',
-            text:  '載入畫布',
-            title: '從 Vault 載入 .enote 專案檔',
+            text:  t('tb.loadProject'),
+            title: t('tb.loadProject.title'),
         });
         loadProjectBtn.addEventListener('click', () => {
             new VaultProjectPickerModal(this.app, (file) => this.loadProject(file)).open();
@@ -928,8 +1125,8 @@ class EasyNoteView extends ItemView {
         // 儲存檔案
         const saveBtn = canvasActions.createEl('button', {
             cls:   'easynote-btn easynote-btn-save',
-            text:  '匯出',
-            title: '將手繪圖儲存到 Vault',
+            text:  t('tb.export'),
+            title: t('tb.export.title'),
         });
         saveBtn.addEventListener('click', () => {
             const ts = this.localTimestamp();
@@ -940,8 +1137,8 @@ class EasyNoteView extends ItemView {
         // 匯出圖層資訊（測試用）
         const exportLayerBtn = canvasActions.createEl('button', {
             cls:   'easynote-btn',
-            text:  '匯出圖層資訊',
-            title: '將畫布所有圖層資訊匯出成 .md 檔案（測試用）',
+            text:  t('tb.exportLayers'),
+            title: t('tb.exportLayers.title'),
         });
         exportLayerBtn.addEventListener('click', () => this.exportLayerInfo());
 
@@ -950,7 +1147,7 @@ class EasyNoteView extends ItemView {
         // 定時 auto-sync 開關按鈕
         this.autoSyncBtn = canvasActions.createEl('button', {
             cls:   'easynote-btn easynote-btn-icon',
-            title: '定時自動重新載入開關',
+            title: t('tb.autoSync.title'),
         });
         setIcon(this.autoSyncBtn, 'refresh-cw');
         this.autoSyncBtn.addEventListener('click', () => {
@@ -967,7 +1164,7 @@ class EasyNoteView extends ItemView {
         // 定時 auto-save 開關按鈕
         this.autoPeriodicSaveBtn = canvasActions.createEl('button', {
             cls:   'easynote-btn easynote-btn-icon',
-            title: '定時自動儲存開關',
+            title: t('tb.autoSave.title'),
         });
         setIcon(this.autoPeriodicSaveBtn, 'clock');
         this.autoPeriodicSaveBtn.addEventListener('click', () => {
@@ -3370,7 +3567,7 @@ class EasyNoteView extends ItemView {
         if (this.sizeValueLabel) {
             if (this.effectiveSizeMode === 'steps') {
                 const step = brushSizeToStep(this.brushSize);
-                this.sizeValueLabel.textContent = `第${step}階(${this.brushSize}px)`;
+                this.sizeValueLabel.textContent = t('status.step', step, this.brushSize);
             } else {
                 this.sizeValueLabel.textContent = `${this.brushSize}px`;
             }
@@ -3383,11 +3580,11 @@ class EasyNoteView extends ItemView {
         if (this.activeLayerLabel) {
             let layerName: string;
             if (this.tool === 'text') {
-                layerName = '文字層';
+                layerName = t('status.layer.text');
             } else if (this.tool === 'select') {
-                layerName = '圖片層';
+                layerName = t('status.layer.image');
             } else {
-                layerName = '插畫層';
+                layerName = t('status.layer.draw');
             }
             this.activeLayerLabel.textContent = layerName;
             this.activeLayerLabel.setAttribute('data-layer', this.tool === 'text' ? 'text' : this.tool === 'select' ? 'image' : 'paint');
@@ -3397,34 +3594,34 @@ class EasyNoteView extends ItemView {
         if (this.autoSyncBtn) {
             this.autoSyncBtn.toggleClass('easynote-btn-active', this.settings.autoSyncEnabled ?? false);
             this.autoSyncBtn.title = this.settings.autoSyncEnabled
-                ? `定時重新載入：開啟（每 ${(this.settings.autoSyncPeriodMs ?? 1000) / 1000} 秒）`
-                : '定時重新載入：關閉';
+                ? t('status.autoSync.on', (this.settings.autoSyncPeriodMs ?? 1000) / 1000)
+                : t('status.autoSync.off');
         }
         if (this.autoPeriodicSaveBtn) {
             this.autoPeriodicSaveBtn.toggleClass('easynote-btn-active', this.settings.autoPeriodicSaveEnabled ?? false);
             this.autoPeriodicSaveBtn.title = this.settings.autoPeriodicSaveEnabled
-                ? `定時儲存：開啟（每 ${(this.settings.autoPeriodicSavePeriodMs ?? 60000) / 1000} 秒）`
-                : '定時儲存：關閉';
+                ? t('status.autoSave.on', (this.settings.autoPeriodicSavePeriodMs ?? 60000) / 1000)
+                : t('status.autoSave.off');
         }
 
-        const zoomStr = `縮放: ${Math.round(this.zoom * 100)}%`;
+        const zoomStr = `${t('status.zoom')}: ${Math.round(this.zoom * 100)}%`;
         const saveStr = this.lastAutoSaveTime
-            ? `暫存: ${this.lastAutoSaveTime.toLocaleTimeString()}`
-            : '暫存: 等待中';
+            ? `${t('status.autosave')}: ${this.lastAutoSaveTime.toLocaleTimeString()}`
+            : `${t('status.autosave')}: ${t('status.waiting')}`;
         if (this.tool === 'select') {
             const ni = this.imageLayers.length;
             const nm = this.markdownLayers.length;
             const nt = this.textLayers.length;
-            this.statusLabel.textContent = `選取模式 | 圖片: ${ni} 張 | MD: ${nm} 個 | 文字: ${nt} 個 | ${zoomStr} | ${saveStr}`;
+            this.statusLabel.textContent = `${t('status.selectMode')} | ${t('status.images')}: ${ni} | MD: ${nm} | ${t('status.texts')}: ${nt} | ${zoomStr} | ${saveStr}`;
         } else if (this.tool === 'text') {
-            this.statusLabel.textContent = `工具: 文字 | 字體: ${this.textFontSize}px | ${zoomStr} | ${saveStr}`;
+            this.statusLabel.textContent = `${t('status.toolText')} | ${t('status.font')}: ${this.textFontSize}px | ${zoomStr} | ${saveStr}`;
         } else if (this.tool === 'paintselect') {
-            const fragStr = this.paintFragment ? ' | 已選取區塊' : '';
-            this.statusLabel.textContent = `工具: 繪畫選取${fragStr} | Enter 確認　Esc 取消　Del 棄用 | ${zoomStr} | ${saveStr}`;
+            const fragStr = this.paintFragment ? ` | ${t('status.hasFrag')}` : '';
+            this.statusLabel.textContent = `${t('status.toolPaintSel')}${fragStr} | ${t('status.paintHint')} | ${zoomStr} | ${saveStr}`;
         } else {
-            const toolName = this.eraser ? '橡皮擦' : `${this.colorNames[this.colorIdx]} 鉛筆`;
+            const toolName = this.eraser ? t('status.eraser') : `${t(`color.${this.colorIdx}`)} ${t('status.pencil')}`;
             const opPct    = Math.round(this.brushOpacity * 100);
-            this.statusLabel.textContent = `工具: ${toolName} | 大小: ${this.brushSize} | 透明度: ${opPct}% | ${zoomStr} | ${saveStr}`;
+            this.statusLabel.textContent = `${t('status.tool')}: ${toolName} | ${t('status.size')}: ${this.brushSize} | ${t('status.opacity')}: ${opPct}% | ${zoomStr} | ${saveStr}`;
         }
     }
 
@@ -5035,12 +5232,12 @@ class SaveModal extends Modal {
     onOpen(): void {
         const { contentEl } = this;
         contentEl.empty();
-        contentEl.createEl('h3', { text: '儲存圖片' });
+        contentEl.createEl('h3', { text: t('modal.save.title') });
 
         // 檔案名稱
         new Setting(contentEl)
-            .setName('檔案名稱')
-            .setDesc('不需要加副檔名')
+            .setName(t('modal.save.filename'))
+            .setDesc(t('modal.save.filenameDesc'))
             .addText((t) => {
                 t.setValue(this.defaultName);
                 t.inputEl.style.width = '100%';
@@ -5052,11 +5249,11 @@ class SaveModal extends Modal {
         // 格式選擇
         let fmt: 'png' | 'jpeg' | 'webp' = 'png';
         new Setting(contentEl)
-            .setName('檔案格式')
+            .setName(t('modal.save.format'))
             .addDropdown((d) => {
-                d.addOption('png',  'PNG（無損，支援透明）');
-                d.addOption('jpeg', 'JPG（較小，不透明）');
-                d.addOption('webp', 'WebP（高壓縮，支援透明）');
+                d.addOption('png',  t('modal.save.png'));
+                d.addOption('jpeg', t('modal.save.jpg'));
+                d.addOption('webp', t('modal.save.webp'));
                 d.setValue('png');
                 d.onChange((v) => { fmt = v as 'png' | 'jpeg' | 'webp'; });
             });
@@ -5065,14 +5262,14 @@ class SaveModal extends Modal {
         const btnRow = contentEl.createEl('div', { cls: 'easynote-size-btnrow' });
         const saveBtn = btnRow.createEl('button', {
             cls:  'easynote-btn easynote-btn-save',
-            text: '儲存',
+            text: t('modal.save.save'),
         });
         saveBtn.addEventListener('click', () => {
             if (!this.defaultName) return;
             this.onSave(this.defaultName, fmt);
             this.close();
         });
-        const cancelBtn = btnRow.createEl('button', { cls: 'easynote-btn', text: '取消' });
+        const cancelBtn = btnRow.createEl('button', { cls: 'easynote-btn', text: t('modal.save.cancel') });
         cancelBtn.addEventListener('click', () => this.close());
 
         // Enter 確認
@@ -5104,10 +5301,10 @@ class CanvasSizeModal extends Modal {
     onOpen(): void {
         const { contentEl } = this;
         contentEl.empty();
-        contentEl.createEl('h3', { text: '設定畫布大小' });
+        contentEl.createEl('h3', { text: t('modal.canvasSize.title') });
         this.hintEl = contentEl.createEl('p', {
             cls:  'easynote-size-hint',
-            text: `目前：${this.currentW} × ${this.currentH}　（現有內容會保留在左上角）`,
+            text: t('modal.canvasSize.hint', this.currentW, this.currentH),
         });
 
         // 輸入列
@@ -5132,9 +5329,9 @@ class CanvasSizeModal extends Modal {
         // 快速預設按鈕
         const presetRow = contentEl.createEl('div', { cls: 'easynote-size-presets' });
         const presets: [string, () => void][] = [
-            ['×2 寬',  () => { this.wInput.value = String((parseInt(this.wInput.value) || this.currentW) * 2); }],
-            ['×2 高',  () => { this.hInput.value = String((parseInt(this.hInput.value) || this.currentH) * 2); }],
-            ['×2 全',  () => { this.wInput.value = String((parseInt(this.wInput.value) || this.currentW) * 2); this.hInput.value = String((parseInt(this.hInput.value) || this.currentH) * 2); }],
+            [t('modal.canvasSize.w2'),  () => { this.wInput.value = String((parseInt(this.wInput.value) || this.currentW) * 2); }],
+            [t('modal.canvasSize.h2'),  () => { this.hInput.value = String((parseInt(this.hInput.value) || this.currentH) * 2); }],
+            [t('modal.canvasSize.all2'),() => { this.wInput.value = String((parseInt(this.wInput.value) || this.currentW) * 2); this.hInput.value = String((parseInt(this.hInput.value) || this.currentH) * 2); }],
             ['1920×1080', () => { this.wInput.value = '1920'; this.hInput.value = '1080'; }],
             ['3840×1080', () => { this.wInput.value = '3840'; this.hInput.value = '1080'; }],
             ['3840×2160', () => { this.wInput.value = '3840'; this.hInput.value = '2160'; }],
@@ -5148,7 +5345,7 @@ class CanvasSizeModal extends Modal {
         const btnRow = contentEl.createEl('div', { cls: 'easynote-size-btnrow' });
         const applyBtn = btnRow.createEl('button', {
             cls:  'easynote-btn easynote-btn-save',
-            text: '套用',
+            text: t('modal.canvasSize.apply'),
         });
         applyBtn.addEventListener('click', () => {
             const w = Math.max(100, Math.min(16000, parseInt(this.wInput.value) || this.currentW));
@@ -5156,7 +5353,7 @@ class CanvasSizeModal extends Modal {
             this.onApply(w, h);
             this.close();
         });
-        const closeBtn = btnRow.createEl('button', { cls: 'easynote-btn', text: '關閉' });
+        const closeBtn = btnRow.createEl('button', { cls: 'easynote-btn', text: t('modal.canvasSize.close') });
         closeBtn.addEventListener('click', () => this.close());
     }
 
@@ -5177,11 +5374,11 @@ class ProjectNameModal extends Modal {
     onOpen(): void {
         const { contentEl } = this;
         contentEl.empty();
-        contentEl.createEl('h3', { text: '儲存專案' });
+        contentEl.createEl('h3', { text: t('modal.project.title') });
 
         new Setting(contentEl)
-            .setName('專案名稱')
-            .setDesc('儲存為 .enote 格式，可下次繼續編輯')
+            .setName(t('modal.project.name'))
+            .setDesc(t('modal.project.desc'))
             .addText((t) => {
                 t.setValue(this.name);
                 t.inputEl.style.width = '100%';
@@ -5190,9 +5387,9 @@ class ProjectNameModal extends Modal {
             });
 
         const btnRow   = contentEl.createEl('div', { cls: 'easynote-size-btnrow' });
-        const saveBtn  = btnRow.createEl('button', { cls: 'easynote-btn easynote-btn-save', text: '儲存' });
+        const saveBtn  = btnRow.createEl('button', { cls: 'easynote-btn easynote-btn-save', text: t('modal.project.save') });
         saveBtn.addEventListener('click', () => { if (this.name) { this.onConfirm(this.name); this.close(); } });
-        const cancelBtn = btnRow.createEl('button', { cls: 'easynote-btn', text: '取消' });
+        const cancelBtn = btnRow.createEl('button', { cls: 'easynote-btn', text: t('modal.project.cancel') });
         cancelBtn.addEventListener('click', () => this.close());
 
         contentEl.addEventListener('keydown', (e) => {
@@ -5219,11 +5416,11 @@ class VaultProjectPickerModal extends Modal {
         const { contentEl } = this;
         contentEl.empty();
         this.modalEl.addClass('easynote-project-picker-modal');
-        contentEl.createEl('h3', { text: '載入 .enote 專案' });
+        contentEl.createEl('h3', { text: t('modal.vaultProject.title') });
 
         this.searchInput             = contentEl.createEl('input');
         this.searchInput.type        = 'text';
-        this.searchInput.placeholder = '搜尋專案名稱…';
+        this.searchInput.placeholder = t('modal.vaultProject.search');
         this.searchInput.className   = 'easynote-picker-search';
         this.searchInput.addEventListener('input', () => this.renderList());
 
@@ -5244,7 +5441,7 @@ class VaultProjectPickerModal extends Modal {
         this.listEl.empty();
         const files = this.getFiles();
         if (files.length === 0) {
-            this.listEl.createEl('div', { cls: 'easynote-picker-empty', text: '找不到 .enote 檔案' });
+            this.listEl.createEl('div', { cls: 'easynote-picker-empty', text: t('modal.vaultProject.empty') });
             return;
         }
         for (const file of files) {
@@ -5277,11 +5474,11 @@ class VaultImagePickerModal extends Modal {
         const { contentEl } = this;
         contentEl.empty();
         this.modalEl.addClass('easynote-vault-picker-modal');
-        contentEl.createEl('h3', { text: '選擇 Vault 圖片' });
+        contentEl.createEl('h3', { text: t('modal.vaultImage.title') });
 
         this.searchInput             = contentEl.createEl('input');
         this.searchInput.type        = 'text';
-        this.searchInput.placeholder = '搜尋圖片檔名…';
+        this.searchInput.placeholder = t('modal.vaultImage.search');
         this.searchInput.className   = 'easynote-picker-search';
         this.searchInput.addEventListener('input', () => this.renderMain());
 
@@ -5326,7 +5523,7 @@ class VaultImagePickerModal extends Modal {
         }
 
         // 「全部」項目
-        this.makeSidebarItem('🗂️', '全部', allImages.length, null);
+        this.makeSidebarItem('🗂️', t('modal.vaultImage.allFolders'), allImages.length, null);
         this.sidebarEl.createEl('div', { cls: 'easynote-picker-sidebar-sep' });
 
         // 各資料夾，根目錄優先
@@ -5336,8 +5533,8 @@ class VaultImagePickerModal extends Modal {
             return a.localeCompare(b);
         });
         for (const folder of folders) {
-            const label   = folder === '/' ? '根目錄' : (folder.split('/').pop() ?? folder);
-            const tooltip = folder === '/' ? '根目錄' : folder;
+            const label   = folder === '/' ? t('modal.vaultImage.rootFolder') : (folder.split('/').pop() ?? folder);
+            const tooltip = folder === '/' ? t('modal.vaultImage.rootFolder') : folder;
             this.makeSidebarItem('📁', label, folderCounts.get(folder)!, folder, tooltip);
         }
     }
@@ -5364,7 +5561,7 @@ class VaultImagePickerModal extends Modal {
         const files = this.getFilteredFiles();
 
         if (files.length === 0) {
-            this.gridEl.createEl('div', { cls: 'easynote-picker-empty', text: '找不到符合的圖片' });
+            this.gridEl.createEl('div', { cls: 'easynote-picker-empty', text: t('modal.vaultImage.empty') });
             return;
         }
 
@@ -5402,15 +5599,15 @@ class VaultNotePickerModal extends Modal {
         const { contentEl } = this;
         contentEl.empty();
         this.modalEl.addClass('easynote-project-picker-modal');
-        contentEl.createEl('h3', { text: '連結 .md 筆記為文字圖層' });
+        contentEl.createEl('h3', { text: t('modal.vaultNote.title') });
         contentEl.createEl('p', {
             cls:  'easynote-picker-hint',
-            text: '選擇筆記後，內容會以原始 Markdown 顯示。每次重新開啟 EasyNote 會自動重新讀取筆記最新內容。',
+            text: t('modal.vaultNote.hint'),
         });
 
         this.searchInput             = contentEl.createEl('input');
         this.searchInput.type        = 'text';
-        this.searchInput.placeholder = '搜尋筆記名稱…';
+        this.searchInput.placeholder = t('modal.vaultNote.search');
         this.searchInput.className   = 'easynote-picker-search';
         this.searchInput.addEventListener('input', () => this.renderList());
 
@@ -5430,7 +5627,7 @@ class VaultNotePickerModal extends Modal {
         this.listEl.empty();
         const files = this.getFiles();
         if (files.length === 0) {
-            this.listEl.createEl('div', { cls: 'easynote-picker-empty', text: '找不到 .md 筆記' });
+            this.listEl.createEl('div', { cls: 'easynote-picker-empty', text: t('modal.vaultNote.empty') });
             return;
         }
         for (const file of files) {
@@ -5492,9 +5689,11 @@ export default class EasyNotePlugin extends Plugin {
 
     async loadSettings(): Promise<void> {
         this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+        _currentLang = (this.settings.language ?? 'zh') as Lang;
     }
 
     async saveSettings(): Promise<void> {
+        _currentLang = (this.settings.language ?? 'zh') as Lang;
         await this.saveData(this.settings);
     }
 
@@ -5833,14 +6032,32 @@ class EasyNoteSettingTab extends PluginSettingTab {
     display(): void {
         const { containerEl } = this;
         containerEl.empty();
-        containerEl.createEl('h2', { text: 'EasyNote 設定' });
+        containerEl.createEl('h2', { text: t('settings.title') });
+
+        // 語系選擇
+        new Setting(containerEl)
+            .setName(t('settings.language'))
+            .setDesc(t('settings.language.desc'))
+            .addDropdown((drop) => {
+                drop.addOption('zh', t('settings.language.zh'));
+                drop.addOption('en', t('settings.language.en'));
+                drop.setValue(this.plugin.settings.language ?? 'zh');
+                drop.onChange(async (value) => {
+                    this.plugin.settings.language = value as 'zh' | 'en';
+                    _currentLang = value as Lang;
+                    await this.plugin.saveSettings();
+                    this.display();
+                });
+            });
 
         // 預設顏色
         new Setting(containerEl)
-            .setName('預設顏色')
-            .setDesc('開啟 EasyNote 時的預設畫筆顏色')
+            .setName(t('settings.color'))
+            .setDesc(t('settings.color.desc'))
             .addDropdown((drop) => {
-                COLOR_NAMES.forEach((name, i) => drop.addOption(String(i), name));
+                for (let i = 0; i < COLOR_NAMES.length; i++) {
+                    drop.addOption(String(i), t(`color.${i}`));
+                }
                 drop.setValue(String(this.plugin.settings.defaultColorIdx));
                 drop.onChange(async (value) => {
                     this.plugin.settings.defaultColorIdx = parseInt(value);
@@ -5850,11 +6067,11 @@ class EasyNoteSettingTab extends PluginSettingTab {
 
         // 筆刷模式
         new Setting(containerEl)
-            .setName('筆刷模式')
-            .setDesc('單點模式：每一筆直接畫在繪畫層（傳統像素繪製）；圖片模式：每一筆畫完後自動成為可選取/刪除的圖片圖層，橡皮擦改為點選刪除')
+            .setName(t('settings.brushMode'))
+            .setDesc(t('settings.brushMode.desc'))
             .addDropdown((drop) => {
-                drop.addOption('pixel', '單點模式');
-                drop.addOption('stroke-layer', '圖片模式');
+                drop.addOption('pixel', t('settings.brushMode.pixel'));
+                drop.addOption('stroke-layer', t('settings.brushMode.strokeLayer'));
                 drop.setValue(this.plugin.settings.brushMode ?? 'pixel');
                 drop.onChange(async (value) => {
                     this.plugin.settings.brushMode = value as 'pixel' | 'stroke-layer';
@@ -5865,11 +6082,11 @@ class EasyNoteSettingTab extends PluginSettingTab {
 
         // 筆刷大小（共用：7 階 / 連續）
         new Setting(containerEl)
-            .setName('筆刷大小模式')
-            .setDesc('7 階：固定 7 個大小等級（快速切換）；連續：自由調整 1–60px')
+            .setName(t('settings.brushSizeMode'))
+            .setDesc(t('settings.brushSizeMode.desc'))
             .addDropdown((drop) => {
-                drop.addOption('steps', '7 階');
-                drop.addOption('continuous', '連續');
+                drop.addOption('steps', t('settings.brushSizeMode.steps'));
+                drop.addOption('continuous', t('settings.brushSizeMode.continuous'));
                 drop.setValue(this.plugin.settings.brushSizeMode ?? 'steps');
                 drop.onChange(async (value) => {
                     this.plugin.settings.brushSizeMode = value as 'steps' | 'continuous';
@@ -5883,8 +6100,8 @@ class EasyNoteSettingTab extends PluginSettingTab {
         if (effectiveBrushMode === 'steps') {
             const curStep = brushSizeToStep(this.plugin.settings.defaultBrushSize);
             new Setting(containerEl)
-                .setName('預設筆刷大小')
-                .setDesc(`開啟 EasyNote 時的預設筆刷階數（7 階）`)
+                .setName(t('settings.defaultBrushSize'))
+                .setDesc(t('settings.defaultBrushSize.stepsDesc'))
                 .addSlider((slider) =>
                     slider
                         .setLimits(1, 7, 1)
@@ -5896,13 +6113,14 @@ class EasyNoteSettingTab extends PluginSettingTab {
                         })
                 );
             containerEl.createEl('p', {
-                text: `7 階對應大小: ${BRUSH_STEPS.map((s, i) => `第${i+1}階=${s}px`).join(' / ')}`,
+                text: t('settings.defaultBrushSize.stepsHint',
+                    BRUSH_STEPS.map((s, i) => t('settings.defaultBrushSize.stepsItem', i + 1, s)).join(' / ')),
                 cls: 'setting-item-description',
             });
         } else {
             new Setting(containerEl)
-                .setName('預設筆刷大小')
-                .setDesc(`開啟 EasyNote 時的預設筆刷大小（${MIN_BRUSH_SIZE}–${MAX_BRUSH_SIZE}px）`)
+                .setName(t('settings.defaultBrushSize'))
+                .setDesc(t('settings.defaultBrushSize.desc', MIN_BRUSH_SIZE, MAX_BRUSH_SIZE))
                 .addSlider((slider) =>
                     slider
                         .setLimits(MIN_BRUSH_SIZE, MAX_BRUSH_SIZE, 1)
@@ -5916,12 +6134,11 @@ class EasyNoteSettingTab extends PluginSettingTab {
         }
 
         // 預設五色筆顏色
-        containerEl.createEl('h3', { text: '預設五色筆顏色' });
-        const colorLabels = ['顏色 1（黑）', '顏色 2（紅）', '顏色 3（藍）', '顏色 4（綠）', '顏色 5（橘）'];
+        containerEl.createEl('h3', { text: t('settings.colors.title') });
         const defaults = this.plugin.settings.defaultColors ?? [...COLORS];
         for (let i = 0; i < 5; i++) {
             new Setting(containerEl)
-                .setName(colorLabels[i])
+                .setName(t(`settings.colors.${i + 1}`))
                 .addColorPicker((picker) => {
                     picker.setValue(defaults[i] ?? COLORS[i]);
                     picker.onChange(async (value) => {
@@ -5936,11 +6153,11 @@ class EasyNoteSettingTab extends PluginSettingTab {
 
         // 啟動畫布模式
         new Setting(containerEl)
-            .setName('啟動畫布模式')
-            .setDesc('開啟 EasyNote 時要呼叫前一次的畫布，還是呼叫對新畫布？選择「呼叫新畫布」時，關閉時會刪除自動暫存檔。')
+            .setName(t('settings.startupMode'))
+            .setDesc(t('settings.startupMode.desc'))
             .addDropdown((drop) => {
-                drop.addOption('new',      '呼叫新畫布（預設）');
-                drop.addOption('previous', '打開前一次');
+                drop.addOption('new',      t('settings.startupMode.new'));
+                drop.addOption('previous', t('settings.startupMode.previous'));
                 drop.setValue(this.plugin.settings.startupMode ?? 'new');
                 drop.onChange(async (value) => {
                     this.plugin.settings.startupMode = value as 'previous' | 'new';
@@ -5950,8 +6167,8 @@ class EasyNoteSettingTab extends PluginSettingTab {
 
         // 預設畫布大小
         new Setting(containerEl)
-            .setName('預設畫布寬度（px）')
-            .setDesc('新畫布的初始寬度（像素），預設 1920')
+            .setName(t('settings.canvasWidth'))
+            .setDesc(t('settings.canvasWidth.desc'))
             .addText((text) =>
                 text
                     .setPlaceholder('1920')
@@ -5965,8 +6182,8 @@ class EasyNoteSettingTab extends PluginSettingTab {
                     })
             );
         new Setting(containerEl)
-            .setName('預設畫布高度（px）')
-            .setDesc('新畫布的初始高度（像素），預設 1080')
+            .setName(t('settings.canvasHeight'))
+            .setDesc(t('settings.canvasHeight.desc'))
             .addText((text) =>
                 text
                     .setPlaceholder('1080')
@@ -5982,13 +6199,13 @@ class EasyNoteSettingTab extends PluginSettingTab {
 
         // 筆觸解析度
         new Setting(containerEl)
-            .setName('筆觸解析度')
-            .setDesc('降低可大幅提升大畫布（8K 等）效能，但筆觸邊緣在縮放後會略微模糊。更改後需重新開啟畫布才生效。')
+            .setName(t('settings.paintScale'))
+            .setDesc(t('settings.paintScale.desc'))
             .addDropdown((drop) => {
-                drop.addOption('1',    '1× 完整解析度（預設）');
-                drop.addOption('0.75', '0.75× 較佳效能');
-                drop.addOption('0.5',  '0.5× 高效能（推薦大畫布）');
-                drop.addOption('0.25', '0.25× 最高效能');
+                drop.addOption('1',    t('settings.paintScale.1'));
+                drop.addOption('0.75', t('settings.paintScale.075'));
+                drop.addOption('0.5',  t('settings.paintScale.05'));
+                drop.addOption('0.25', t('settings.paintScale.025'));
                 drop.setValue(String(this.plugin.settings.paintScale ?? 1));
                 drop.onChange(async (value) => {
                     this.plugin.settings.paintScale = parseFloat(value);
@@ -5996,17 +6213,16 @@ class EasyNoteSettingTab extends PluginSettingTab {
                 });
             });
 
-        // 儲存資料夾
+        // 時區
         new Setting(containerEl)
-            .setName('時區')
-            .setDesc('儲存檔名使用的時區（IANA 格式，例如 Asia/Taipei、America/New_York、Europe/London）')
+            .setName(t('settings.timezone'))
+            .setDesc(t('settings.timezone.desc'))
             .addText((text) =>
                 text
                     .setPlaceholder('Asia/Taipei')
                     .setValue(this.plugin.settings.timezone ?? 'Asia/Taipei')
                     .onChange(async (value) => {
                         const tz = value.trim();
-                        // 簡單驗證：嘗試建立 Intl.DateTimeFormat，失敗則不儲存
                         try {
                             new Intl.DateTimeFormat('sv-SE', { timeZone: tz });
                             this.plugin.settings.timezone = tz;
@@ -6019,8 +6235,8 @@ class EasyNoteSettingTab extends PluginSettingTab {
 
         // 定時 auto-sync
         new Setting(containerEl)
-            .setName('定時自動重新載入')
-            .setDesc('開啟後，畫布會依照設定的間隔定時自動重新載入目前畫布檔（工具列按鈕也可即時切換），沒有檔名時不作動')
+            .setName(t('settings.autoSync'))
+            .setDesc(t('settings.autoSync.desc'))
             .addToggle((toggle) => {
                 toggle.setValue(this.plugin.settings.autoSyncEnabled ?? false);
                 toggle.onChange(async (value) => {
@@ -6030,8 +6246,8 @@ class EasyNoteSettingTab extends PluginSettingTab {
             });
 
         new Setting(containerEl)
-            .setName('自動重新載入間隔（秒）')
-            .setDesc('定時自動重新載入的間隔秒數，最短 1 秒')
+            .setName(t('settings.autoSyncPeriod'))
+            .setDesc(t('settings.autoSyncPeriod.desc'))
             .addText((text) =>
                 text
                     .setPlaceholder('5')
@@ -6047,8 +6263,8 @@ class EasyNoteSettingTab extends PluginSettingTab {
 
         // 定時 auto-save
         new Setting(containerEl)
-            .setName('定時自動儲存')
-            .setDesc('開啟後，畫布會依照設定的間隔定時自動儲存（工具列按鈕也可即時切換）')
+            .setName(t('settings.autoSave'))
+            .setDesc(t('settings.autoSave.desc'))
             .addToggle((toggle) => {
                 toggle.setValue(this.plugin.settings.autoPeriodicSaveEnabled ?? false);
                 toggle.onChange(async (value) => {
@@ -6058,8 +6274,8 @@ class EasyNoteSettingTab extends PluginSettingTab {
             });
 
         new Setting(containerEl)
-            .setName('自動儲存間隔（秒）')
-            .setDesc('定時自動儲存的間隔秒數，最短 1 秒')
+            .setName(t('settings.autoSavePeriod'))
+            .setDesc(t('settings.autoSavePeriod.desc'))
             .addText((text) =>
                 text
                     .setPlaceholder('60')
@@ -6074,8 +6290,8 @@ class EasyNoteSettingTab extends PluginSettingTab {
             );
 
         new Setting(containerEl)
-            .setName('儲存資料夾')
-            .setDesc('點擊「儲存 PNG」後，手繪圖存入 Vault 的哪個資料夾')
+            .setName(t('settings.saveFolder'))
+            .setDesc(t('settings.saveFolder.desc'))
             .addText((text) =>
                 text
                     .setPlaceholder('EasyNote')
@@ -6087,24 +6303,21 @@ class EasyNoteSettingTab extends PluginSettingTab {
             );
 
         // ── Google Drive 同步 ────────────────────────────────────────────────
-        containerEl.createEl('h3', { text: 'Google Drive 同步' });
+        containerEl.createEl('h3', { text: t('settings.gdrive.title') });
         containerEl.createEl('p', {
             cls:  'setting-item-description',
-            text: '自動儲存時同步上傳到 Google Drive，自動載入時從 Google Drive 下載（同步資料夾：EasyNote-Sync）。',
+            text: t('settings.gdrive.desc'),
         });
 
         // 顯示需要登記的 Redirect URI
         const uriInfoEl = containerEl.createEl('p', { cls: 'setting-item-description' });
-        uriInfoEl.innerHTML =
-            `<b>桌面版</b>請在 Google Cloud Console → 憑證 → OAuth 2.0 用戶端 → 「已授權的重新導向 URI」新增：` +
-            `<br><code style="user-select:all">http://localhost:42813</code>` +
-            `<br><b>行動版（Android / iOS）</b>另需新增：` +
-            `<br><code style="user-select:all">http://localhost</code>` +
-            `<br>（若用戶端類型已選「桌面應用程式」則以上皆自動允許，無需手動新增）`;
+        uriInfoEl.innerHTML = t('settings.gdrive.uriInfo')
+            .replace('{desktopCode}', '<code style="user-select:all">http://localhost:42813</code>')
+            .replace('{mobileCode}',  '<code style="user-select:all">http://localhost</code>');
 
         new Setting(containerEl)
-            .setName('啟用 Google Drive 同步')
-            .setDesc('開啟後，自動儲存時同步上傳到 Google Drive，自動載入時從 Google Drive 下載。')
+            .setName(t('settings.gdrive.enable'))
+            .setDesc(t('settings.gdrive.enable.desc'))
             .addToggle((toggle) => {
                 toggle.setValue(this.plugin.settings.googleDriveEnabled ?? false);
                 toggle.onChange(async (value) => {
@@ -6115,12 +6328,12 @@ class EasyNoteSettingTab extends PluginSettingTab {
 
         const isConnected = !!this.plugin.settings.googleRefreshToken;
         new Setting(containerEl)
-            .setName('Google Drive 連線狀態')
+            .setName(t('settings.gdrive.status'))
             .setDesc(isConnected
-                ? '✓ 已連線 Google Drive（同步資料夾：EasyNote-Sync）'
-                : '尚未連線，請點擊「連線 Google Drive」並在瀏覽器中登入 Google 帳戶。')
+                ? t('settings.gdrive.connected')
+                : t('settings.gdrive.notConnected'))
             .addButton((btn) => {
-                btn.setButtonText(isConnected ? '重新授權' : '連線 Google Drive');
+                btn.setButtonText(isConnected ? t('settings.gdrive.reconnect') : t('settings.gdrive.connect'));
                 btn.setCta();
                 btn.onClick(async () => {
                     await this.plugin.startGoogleOAuthFlow();
@@ -6128,7 +6341,7 @@ class EasyNoteSettingTab extends PluginSettingTab {
                 });
             })
             .addButton((btn) => {
-                btn.setButtonText('中斷連線');
+                btn.setButtonText(t('settings.gdrive.disconnect'));
                 btn.setDisabled(!isConnected);
                 btn.onClick(async () => {
                     await this.plugin.revokeGoogleAuth();
