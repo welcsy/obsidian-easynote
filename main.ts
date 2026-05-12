@@ -2116,9 +2116,8 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         let changed = false;
         for (let i = this.imageLayers.length - 1; i >= 0; i--) {
             const lay = this.imageLayers[i];
-            const hit = lay.strokeName
-                ? this.strokePixelHitTest(mx, my, lay)
-                : this.pointInLayer(mx, my, lay);
+            if (!lay.strokeName) continue;  // 僅擦除筆刷圖片，不影響匯入的圖片圖層
+            const hit = this.strokePixelHitTest(mx, my, lay);
             if (hit) {
                 this.imageLayers.splice(i, 1);
                 this.selectedIdx = -1;
