@@ -1523,24 +1523,12 @@ class EasyNoteView extends ItemView {
                 this.render();
             } else {
                 // 畫筆 / 橡皮擦
-                // stroke-layer 模式下橡皮擦：點選圖片圖層即刪除
+                // stroke-layer 模式下橡皮擦：壓著滑過即刪除所有觸及的圖層
                 if (this.settings.brushMode === 'stroke-layer' && this.eraser) {
-                    for (let i = this.imageLayers.length - 1; i >= 0; i--) {
-                        const lay = this.imageLayers[i];
-                        // stroke 圖層用 pixel-level hit test；一般圖片用 bounding box
-                        const hit = lay.strokeName
-                            ? this.strokePixelHitTest(mx, my, lay)
-                            : this.pointInLayer(mx, my, lay);
-                        if (hit) {
-                            this.pushHistory('橡皮擦（圖層）');
-                            this.imageLayers.splice(i, 1);
-                            this.selectedIdx = -1;
-                            this.render();
-                            this.scheduleAutosave();
-                            return;
-                        }
-                    }
-                    return;  // 沒點到任何圖層，不做任何事
+                    this.pushHistory('橡皮擦（圖層）');
+                    this.drawing = true;  // 讓 pointermove 持續觸發擦除
+                    this._eraseLayerAt(mx, my);
+                    return;
                 }
                 this.pushHistory(this.eraser ? '橡皮擦' : '筆觸');  // 每次筆觸開始前保存快照
                 this.drawing = true;
@@ -1855,6 +1843,11 @@ class EasyNoteView extends ItemView {
                     this.render();
                 }
             } else if (this.drawing) {
+                // stroke-layer 橡皮擦：滑過時持續擦除
+                if (this.settings.brushMode === 'stroke-layer' && this.eraser) {
+                    this._eraseLayerAt(mx, my);
+                    return;
+                }
                 // 使用 getCoalescedEvents 取回所有被合併的中間點，
                 // 避免大畫布在 Android 上因事件節流導致曲線退化成直線
                 const coalesced = (e as PointerEvent).getCoalescedEvents?.() ?? [e];
@@ -2547,6 +2540,31 @@ class EasyNoteView extends ItemView {
             if (data[i] > 10) return true;
         }
         return false;
+    }
+
+    /**
+     * Erase all image layers touching (mx, my). Called on both pointerdown and pointermove
+     * so the eraser works continuously while the mouse button is held.
+     * Stroke layers use pixel hit test; imported images use bounding box.
+     */
+    private _eraseLayerAt(mx: number, my: number): void {
+        let changed = false;
+        for (let i = this.imageLayers.length - 1; i >= 0; i--) {
+            const lay = this.imageLayers[i];
+            const hit = lay.strokeName
+                ? this.strokePixelHitTest(mx, my, lay)
+                : this.pointInLayer(mx, my, lay);
+            if (hit) {
+                this.imageLayers.splice(i, 1);
+                this.selectedIdx = -1;
+                changed = true;
+                // continue scanning — mouse may overlap multiple layers simultaneously
+            }
+        }
+        if (changed) {
+            this.render();
+            this.scheduleAutosave();
+        }
     }
 
     /** 回傳文字圖層的近似包圍矩形 */
