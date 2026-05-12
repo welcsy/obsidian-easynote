@@ -561,6 +561,8 @@ class EasyNoteView extends ItemView {
     // stroke-layer 模式：筆觸 dirty rect 追蹤 & 自動命名計數器
     private _strokeDirty:   { x1: number; y1: number; x2: number; y2: number } | null = null;
     private _strokeCounter  = 0;
+    // stroke-layer 橡皮擦 pixel hit test 用的共用小 canvas
+    private _hitCanvas: HTMLCanvasElement | null = null;
 
     // 自訂游標 dot（固定定位 overlay）
     private _cursorDot: HTMLDivElement | null = null;
@@ -1524,7 +1526,12 @@ class EasyNoteView extends ItemView {
                 // stroke-layer 模式下橡皮擦：點選圖片圖層即刪除
                 if (this.settings.brushMode === 'stroke-layer' && this.eraser) {
                     for (let i = this.imageLayers.length - 1; i >= 0; i--) {
-                        if (this.pointInLayer(mx, my, this.imageLayers[i])) {
+                        const lay = this.imageLayers[i];
+                        // stroke 圖層用 pixel-level hit test；一般圖片用 bounding box
+                        const hit = lay.strokeName
+                            ? this.strokePixelHitTest(mx, my, lay)
+                            : this.pointInLayer(mx, my, lay);
+                        if (hit) {
                             this.pushHistory('橡皮擦（圖層）');
                             this.imageLayers.splice(i, 1);
                             this.selectedIdx = -1;
@@ -2488,6 +2495,58 @@ class EasyNoteView extends ItemView {
 
     private pointInLayer(mx: number, my: number, lay: ImageLayer): boolean {
         return this.pointInRotatedRect(mx, my, lay.x, lay.y, lay.w, lay.h, lay.rotation || 0);
+    }
+
+    /**
+     * Pixel-level alpha hit test for stroke-layer images.
+     * Checks if (mx, my) in canvas space touches any non-transparent pixel
+     * within the eraser's brush radius. Handles layer rotation.
+     */
+    private strokePixelHitTest(mx: number, my: number, lay: ImageLayer): boolean {
+        // Fast bounding-box reject first
+        if (!this.pointInRotatedRect(mx, my, lay.x, lay.y, lay.w, lay.h, lay.rotation || 0)) return false;
+
+        // Map (mx, my) into the image's local unrotated coordinate space
+        const rot = lay.rotation || 0;
+        const cx  = lay.x + lay.w / 2;
+        const cy  = lay.y + lay.h / 2;
+        let dx = mx - cx;
+        let dy = my - cy;
+        if (rot !== 0) {
+            const cos = Math.cos(-rot), sin = Math.sin(-rot);
+            const nx  = dx * cos - dy * sin;
+            const ny  = dx * sin + dy * cos;
+            dx = nx; dy = ny;
+        }
+
+        // Convert to image pixel coordinates
+        const scaleX = lay.img.naturalWidth  / lay.w;
+        const scaleY = lay.img.naturalHeight / lay.h;
+        const imgCX  = (dx + lay.w / 2) * scaleX;
+        const imgCY  = (dy + lay.h / 2) * scaleY;
+
+        // Sample area = eraser brush radius in image pixels (min 2px so antialiased edges register)
+        const sampleR = Math.max(2, Math.ceil(this.brushSize / 2 * scaleX));
+        const sx = Math.max(0, Math.floor(imgCX - sampleR));
+        const sy = Math.max(0, Math.floor(imgCY - sampleR));
+        const sw = Math.min(sampleR * 2 + 1, lay.img.naturalWidth  - sx);
+        const sh = Math.min(sampleR * 2 + 1, lay.img.naturalHeight - sy);
+        if (sw <= 0 || sh <= 0) return false;
+
+        // Reuse a shared offscreen canvas to avoid GC pressure
+        if (!this._hitCanvas) this._hitCanvas = document.createElement('canvas');
+        const hc  = this._hitCanvas;
+        hc.width  = sw;
+        hc.height = sh;
+        const hCtx = hc.getContext('2d')!;
+        hCtx.clearRect(0, 0, sw, sh);
+        hCtx.drawImage(lay.img, sx, sy, sw, sh, 0, 0, sw, sh);
+        const data = hCtx.getImageData(0, 0, sw, sh).data;
+        // Any pixel with alpha > 10 counts as a hit
+        for (let i = 3; i < data.length; i += 4) {
+            if (data[i] > 10) return true;
+        }
+        return false;
     }
 
     /** 回傳文字圖層的近似包圍矩形 */
