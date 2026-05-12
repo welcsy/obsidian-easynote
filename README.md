@@ -1,234 +1,140 @@
-# EasyNote — Obsidian 手繪筆記插件
+# EasyNote — Obsidian Drawing Plugin
 
-在 Obsidian 側邊欄開啟全功能手繪畫布，支援多色畫筆、橡皮擦、圖片圖層（含多選圈選）、文字圖層、Markdown 圖層（支援 `[[wikilink]]` 與 `[text](url)` 超連結），以及可命名的復原 / 重做歷程。畫布狀態以 `.enote` 格式儲存，可隨時繼續編輯。
-
----
-
-## .enote 檔案格式
-
-`.enote` 是 EasyNote 的專案格式，保存畫布尺寸、繪畫層、圖片圖層、文字圖層與 Markdown 圖層的完整狀態。
-
-### 在 Obsidian 檔案總管中顯示 .enote 檔
-
-Obsidian 預設會隱藏未知副檔名的檔案。若要讓 `.enote` 出現在左側檔案總管，請開啟：
-
-> **Settings → Files & Links → Detect all file extensions → 開啟**
+A full-featured drawing canvas in the Obsidian sidebar. Supports multi-color brushes, eraser, image layers (including multi-layer rubber-band selection), text layers, Markdown layers (with `[[wikilink]]` and `[text](url)` links), and named undo / redo history. Canvas state is saved in `.enote` format and can be resumed at any time.
 
 ---
 
-## 功能特色
+## Features
 
-### 插畫工具
-- **多色畫筆**：5 色快速切換（快捷鍵 `1`–`5`），雙擊色塊可自訂顏色
-- **橡皮擦**（快捷鍵 `E`）：`destination-out` 透明擦除，不影響圖片層
-- **筆刷大小**：7 階模式（預設）或連續 1–60px 模式（可在設定切換）
-- **透明度**：1%–100% 可調
-- **繪畫選取**（快捷鍵 `M`）：框選繪畫層區塊，可移動、縮放後合併回繪畫層
+### Drawing Tools
+- **Multi-color brush**: Quick switch between 5 colors (keys `1`–`5`); long-press a color swatch to customize
+- **Eraser** (key `E`):
+  - **Pixel mode**: transparent `destination-out` erase — does not affect image layers
+  - **Image mode**: tap to delete the corresponding stroke layer
+- **Brush size**: 7-step mode or continuous 1–60 px mode (switchable in settings); slider shows value in real time
+- **Opacity**: adjustable from 1% to 100%
+- **Brush mode**:
+  - **Pixel mode**: each stroke is drawn directly onto the paint layer (traditional pixel drawing)
+  - **Image mode** (default): each stroke is automatically converted to a selectable / deletable image layer when lifted
+- **Paint select** (key `M`, Pixel mode only): rubber-band select a region of the paint layer; move, resize, then merge back
 
-### 圖片與圖層工具
-- **選取工具**（快捷鍵 `S`）：
-  - 單點選取 → 移動、四角縮放（`Shift` = 等比例）、`Del` 刪除
-  - **拖曳圈選**：在空白處拖曳畫出選框，框住的圖片 / 文字 / Markdown 圖層會形成群組，顯示紫色邊框；群組可整體移動、縮放、`Del` 一次刪除
-- **載入本機圖片**：本機檔案選擇，或拖曳 / `Ctrl+V` 貼上
-- **載入 Obsidian 圖片**：從 Vault 中瀏覽並選取圖片
+### Image & Layer Tools
+- **Select tool** (key `S`):
+  - Single tap → move, corner-resize (`Shift` = proportional), `Del` to delete
+  - **Rubber-band select**: drag on empty canvas to draw a selection box; all image / text / Markdown layers inside form a group (purple border) that can be moved, resized, or deleted together with `Del`
+- **Load local image**: file picker, or drag-and-drop / `Ctrl+V` paste
+- **Load Obsidian image**: browse and pick an image from the Vault
 
-### 文字工具
-- **文字圖層**（快捷鍵 `T`）：點擊畫布新增，雙擊現有文字編輯
-- **Markdown 圖層**：以「載入筆記」載入 Vault `.md` 檔並即時渲染；雙擊編輯
-  - 支援 `[[wikilink]]` — 點擊在 Obsidian 開啟對應筆記
-  - 支援 `[text](url)` — 點擊在瀏覽器開啟外部連結
+### Text Tools
+- **Text layer** (key `T`): click canvas to add; double-click existing text to edit
+- **Markdown layer**: load a Vault `.md` file via "Load Note" for live rendering; bidirectional sync; double-click to edit
+  - Supports `[[wikilink]]` — click to open in Obsidian
+  - Supports `[text](url)` — click to open in browser
 
-### 復原 / 重做
-- **Ctrl+Z / Ctrl+Y**：復原 / 重做，最多 50 步
-- **下拉歷程選單**：點擊 ↩ / ↪ 按鈕旁的箭頭展開歷程，清楚列出每步操作名稱（如「移動圖片圖層」、「新增文字圖層」），可直接跳轉到任意步驟
+### Undo / Redo
+- **Ctrl+Z / Ctrl+Y**: undo / redo, up to 50 steps
+- **History dropdown**: click the arrow next to ↩ / ↪ to expand the named history list and jump to any step directly
 
-### 畫布管理
-- **儲存畫布 / 載入畫布**：以 `.enote` 儲存完整專案
-- **匯出**：將所有圖層合成後匯出為 PNG / JPEG 到 Vault
-- **畫布大小**：可自由調整，預設 1920×1080
-- **縮放 & 平移**：滾輪縮放（游標錨點）、中鍵拖曳平移；`0` 重設至 100%
+### Canvas Management
+- **Save / Load Canvas**: save the full project as `.enote`; manage multiple canvases in the Vault
+- **Export**: flatten all layers and export as PNG / JPEG / WebP to the Vault; the last saved or loaded project name is pre-filled automatically
+- **Canvas size**: freely adjustable; default 1920 × 1080
+- **Zoom & Pan**: scroll-wheel zoom (cursor-anchored), middle-button drag pan; `0` resets to 100%
+
+### Touch Support
+- **Two-finger pinch-to-zoom / pan**: standard gesture
+- **Long press**: triggers the context menu
+- **Stylus**: native Pointer Events support
 
 ---
 
-## 圖層順序（由上到下渲染）
+## Layer Rendering Order (top to bottom)
 
-| 層級 | 說明 |
+| Layer | Description |
 |---|---|
-| 繪畫層 | 手繪筆觸（透明底） |
-| Markdown 圖層 | Vault 筆記渲染結果 |
-| 文字層 | 可移動的文字方塊 |
-| 圖片層 | 載入的圖片（最底層） |
+| Paint layer | Brush strokes (Pixel mode) or stroke image layers (Image mode) |
+| Markdown layers | Vault note rendered output |
+| Text layers | Movable text boxes |
+| Image layers | Loaded images (bottom-most) |
 
 ---
 
-## 快捷鍵
+## Keyboard Shortcuts
 
-| 按鍵 | 功能 |
+| Key | Action |
 |---|---|
-| `1`–`5` | 切換畫筆顏色 |
-| `E` | 切換橡皮擦 |
-| `T` | 文字工具 |
-| `S` | 選取工具（含拖曳多選） |
-| `M` | 繪畫選取工具 |
-| `+` / `-` | 增大 / 減小筆刷 |
-| `0` | 重設縮放至 100% |
-| `Ctrl+Z` | 復原 |
-| `Ctrl+Y` | 重做 |
-| `Ctrl+C` | 複製選取圖層 |
-| `Ctrl+X` | 剪下選取圖層 |
-| `Ctrl+V` | 貼上（內部剪貼板或系統圖片） |
-| `Del` | 刪除選取圖層 / 群組 |
-| `Esc` | 取消圈選框 / 解除群組選取 |
-| 滾輪 | 縮放畫布 |
-| 中鍵拖曳 | 平移畫布 |
+| `1`–`5` | Switch brush color |
+| `E` | Toggle eraser |
+| `T` | Text tool |
+| `S` | Select tool (with rubber-band multi-select) |
+| `M` | Paint select tool (Pixel mode only) |
+| `+` / `-` | Increase / decrease brush size |
+| `0` | Reset zoom to 100% |
+| `Ctrl+Z` | Undo |
+| `Ctrl+Y` | Redo |
+| `Ctrl+C` | Copy selected layer |
+| `Ctrl+X` | Cut selected layer |
+| `Ctrl+V` | Paste (internal clipboard or system image) |
+| `Del` | Delete selected layer / group |
+| `Esc` | Cancel selection box / deselect group |
+| Scroll wheel | Zoom canvas |
+| Middle-button drag | Pan canvas |
 
 ---
 
-## 設定說明
+## Settings
 
-| 設定項目 | 說明 | 預設 |
+| Setting | Description | Default |
 |---|---|---|
-| 預設顏色 | 開啟時的預設畫筆顏色 | 黑色 |
-| 筆刷模式 | 7 階固定檔位 或 連續 1–60px | 7 階 |
-| 預設筆刷大小 | 開啟時的預設筆刷大小 | 第 2 階（6px） |
-| 預設五色筆顏色 | 自訂 5 個色塊的起始顏色 | 黑紅藍綠橘 |
-| 啟動畫布模式 | 呈現新畫布（預設）或打開前一次 | 呈現新畫布 |
-| 預設畫布寬度 / 高度 | 新畫布的初始尺寸 | 1920 × 1080 |
-| 儲存資料夾 | 匯出 PNG 及儲存 `.enote` 的位置 | `EasyNote` |
+| Language | Traditional Chinese / English | Traditional Chinese |
+| Default color | Brush color on open | Black |
+| Brush mode | Pixel mode (direct paint) or Image mode (each stroke becomes a layer) | Image mode |
+| Brush size mode | 7-step fixed or continuous 1–60 px | 7-step |
+| Default brush size | Brush size on open | Step 2 (6 px) |
+| Default 5-color palette | Starting colors for the 5 color swatches | Black, Red, Blue, Green, Orange |
+| Startup canvas mode | New canvas or resume previous | New canvas |
+| Default canvas width / height | Initial size for new canvases | 1920 × 1080 |
+| Paint resolution scale | 1.0 = full resolution; 0.5 = performance mode | 1.0 |
+| Timezone | IANA timezone for export filename timestamps | Asia/Taipei |
+| Auto sync | Periodically reload `.enote` from Vault | Off |
+| Periodic auto-save | Periodically auto-save to `.enote` | Off |
+| Save folder | Location for exported PNGs and `.enote` files | `EasyNote` |
+| Google Drive sync | Connect Google Drive for backup / sync | Off |
 
 ---
 
-## 安裝
+## The .enote Format
 
-### 手動安裝
-1. 前往 [Releases](../../releases) 下載最新版的 `main.js`、`manifest.json`、`styles.css`
-2. 複製到 Vault 的 `.obsidian/plugins/easynote/` 資料夾
-3. 在 Obsidian 設定 → 社群插件 中啟用 **Easy Note**
+`.enote` is EasyNote's project format. It stores the canvas dimensions, paint layer, image layers, text layers, and Markdown layers in their entirety.
 
-### 從原始碼建置
+### Showing .enote files in the Obsidian file explorer
+
+Obsidian hides files with unknown extensions by default. To make `.enote` appear in the left-side file explorer, enable:
+
+> **Settings → Files & Links → Detect all file extensions → On**
+
+Once enabled, `.enote` files will appear normally in the file explorer and can be selected via the "Load Canvas" button.
+
+---
+
+## Installation
+
+### Manual installation
+1. Download the latest `main.js`, `manifest.json`, and `styles.css` from [Releases](../../releases)
+2. Copy them to `.obsidian/plugins/easynote/` inside your Vault
+3. Enable **Easy Note** in Obsidian Settings → Community Plugins
+
+### Build from source
 ```bash
 git clone <repo-url>
-cd godot-easynote
+cd easynote
 npm install
 npm run build
 ```
 
 ---
 
-## 系統需求
+## Requirements
 
-- Obsidian `1.0.0` 以上
-- 僅限桌面版（Desktop Only）
-
-
----
-
-## .enote 檔案格式
-
-`.enote` 是 EasyNote 的專案格式，保存畫布尺寸、繪畫層、圖片圖層、文字圖層與 Markdown 圖層的完整狀態。
-
-### 在 Obsidian 檔案總管中顯示 .enote 檔
-
-Obsidian 預設會隱藏未知副檔名的檔案。若要讓 `.enote` 出現在左側檔案總管，請開啟：
-
-> **Settings → Files & Links → Detect all file extensions → 開啟**
-
-開啟後，`.enote` 即會正常列於檔案總管，也可透過「載入畫布」按鈕從 Vault 中選取。
-
----
-
-## 功能特色
-
-### 插畫工具
-- **多色畫筆**：5 色快速切換（快捷鍵 `1`–`5`），雙擊色塊可自訂顏色
-- **橡皮擦**（快捷鍵 `E`）：`destination-out` 透明擦除，不影響圖片層
-- **筆刷大小**：7 階模式（預設）或連續 1–60px 模式（可在設定切換），拉動滑桿即時顯示數值
-- **透明度**：1%–100% 可調，拉動滑桿即時顯示數值
-- **繪畫選取**（快捷鍵 `M`）：框選繪畫層區塊，可移動、縮放後合併
-
-### 文字工具
-- **文字图層**（快捷鍵 `T`）：點擊畫布新增，雙擊現有文字編輯；編輯框深色背景 + 白字
-- **Markdown 圖層**：以 `載入筆記` 載入 Vault `.md` 檔，雙向同步；雙擊編輯
-
-### 圖片工具
-- **選取工具**（快捷鍵 `S`）：移動、四角縮放（Shift = 等比例）、刪除圖片 / 文字圖層
-- **載入本機圖片**：本機檔案選擇，或拖曳 / `Ctrl+V` 貼上
-- **載入 Obsidian 圖片**：從 Vault 中瀏覽並選取圖片
-
-### 畫布管理
-- **儲存畫布 / 載入畫布**：以 `.enote` 儲存完整專案，可在 Vault 中管理多個畫布
-- **匯出**：將所有圖層合成後匯出為 PNG / JPEG 到 Vault
-- **畫布大小**：可自由調整，預設 1920×1080（可在設定中修改）
-- **縮放 & 平移**：滾輪縮放（游標錨點）、中鍵拖曳平移；`0` 重設至 100%
-
----
-
-## 圖層順序（由上到下渲染）
-
-| 層級 | 說明 |
-|---|---|
-| 繪畫層 | 手繪筆觸（透明底） |
-| Markdown 圖層 | Vault 筆記渲染結果 |
-| 文字層 | 可移動的文字方塊 |
-| 圖片層 | 載入的圖片（最底層） |
-
----
-
-## 快捷鍵
-
-| 按鍵 | 功能 |
-|---|---|
-| `1`–`5` | 切換畫筆顏色 |
-| `E` | 切換橡皮擦 |
-| `T` | 文字工具 |
-| `S` | 選取工具 |
-| `M` | 繪畫選取工具 |
-| `+` / `-` | 增大 / 減小筆刷 |
-| `0` | 重設縮放至 100% |
-| `Ctrl+Z` | 復原 |
-| `Ctrl+Y` | 重做 |
-| `Ctrl+C` | 複製選取圖層 |
-| `Ctrl+X` | 剪下選取圖層 |
-| `Ctrl+V` | 貼上（內部剪貼板或系統圖片） |
-| `Del` | 刪除選取圖層 |
-| 滾輪 | 縮放畫布 |
-| 中鍵拖曳 | 平移畫布 |
-
----
-
-## 設定說明
-
-| 設定項目 | 說明 | 預設 |
-|---|---|---|
-| 預設顏色 | 開啟時的預設畫筆顏色 | 黑色 |
-| 筆刷模式 | 7 階固定檔位 或 連續 1–60px | 7 階 |
-| 預設筆刷大小 | 開啟時的預設筆刷大小 | 第 2 階（6px） |
-| 預設五色筆顏色 | 自訂 5 個色塊的起始顏色 | 黑紅藍綠橘 |
-| 啟動畫布模式 | 呈現新畫布（預設）或打開前一次 | 呈現新畫布 |
-| 預設畫布寬度 / 高度 | 新畫布的初始尺寸 | 1920 × 1080 |
-| 儲存資料夾 | 匯出 PNG 及儲存 `.enote` 的位置 | `EasyNote` |
-
----
-
-## 安裝
-
-### 手動安裝
-1. 前往 [Releases](../../releases) 下載最新版的 `main.js`、`manifest.json`、`styles.css`
-2. 複製到 Vault 的 `.obsidian/plugins/easynote/` 資料夾
-3. 在 Obsidian 設定 → 社群插件 中啟用 **Easy Note**
-
-### 從原始碼建置
-```bash
-git clone <repo-url>
-cd godot-easynote
-npm install
-npm run build
-```
-
----
-
-## 系統需求
-
-- Obsidian `1.0.0` 以上
-- 僅限桌面版（Desktop Only）
-
+- Obsidian `1.0.0` or higher
+- Works on both desktop and mobile
