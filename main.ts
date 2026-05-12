@@ -42,6 +42,7 @@ import { SaveModal, CanvasSizeModal, ProjectNameModal, VaultProjectPickerModal, 
 
 // ─── 輸入處理 ─────────────────────────────────────────────────────────────────
 import { DesktopInputHandler } from './input/input-desktop';
+import { CanvasInputHandler }  from './input/input-canvas';
 import { type FeatureAPI, type Tool } from './input/input-api';
 
 // ─── 繪圖面板（ItemView）──────────────────────────────────────────────────────
@@ -221,6 +222,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
 
     // 事件繫結
     private _desktopInput!: DesktopInputHandler;
+    private _canvasInput!:  CanvasInputHandler;
     private _onResize!:  ()                  => void;
     // Vault 檔案變更監聽（雙向同步）
     private _vaultModifyRef:      import('obsidian').EventRef | null = null;
@@ -349,6 +351,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             }
         }
         this._desktopInput.unbind(document, this.canvas);
+        this._canvasInput.unbind(this.canvas);
         window.removeEventListener('resize',    this._onResize);
         if (this._cursorDot) { this._cursorDot.remove(); this._cursorDot = null; }
     }
@@ -810,852 +813,11 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         }, { passive: true });
 
         // ── 滑鼠事件 ──────────────────────────────────────────────────────────
-        this.canvas.addEventListener('pointerdown', (e) => {
-            this.activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-            // 雙指觸控 → 切換到平移 / 縮放模式，不執行繪圖
-            // 三指以上：只記錄位置，其餘忽略（避免觸發繪圖 / 跳位）
-            if (this.activePointers.size >= 3) {
-                this.canvas.setPointerCapture(e.pointerId);
-                return;
-            }
-            if (this.activePointers.size === 2) {
-                // 中止任何進行中的繪圖 / 拖曳
-                this.gestureActive = false; // 重新開始雙指手勢，清除殘餘旗標
-                this.drawing       = false;
-                this.dragState     = null;
-                this.textDragState = null;
-                this.mdDragState   = null;
-                this.paintFragDrag = null;
-                this.multiSelDrag  = null;
-                this.imgSelStart   = null;
-                this.imgSelCurrent = null;
-                // 記錄 pinch 起始距離與畫面中心
-                const ptrs = [...this.activePointers.values()];
-                const dx   = ptrs[1].x - ptrs[0].x;
-                const dy   = ptrs[1].y - ptrs[0].y;
-                this.pinchStartDist = Math.hypot(dx, dy);
-                this.pinchStartZoom = this.zoom;
-                this.pinchCenterX   = (ptrs[0].x + ptrs[1].x) / 2;
-                this.pinchCenterY   = (ptrs[0].y + ptrs[1].y) / 2;
-                // 以雙指中心開始平移（增量模式，每幀更新 panStartX/Y）
-                this.isPanning  = true;
-                this.panStartX  = this.pinchCenterX;
-                this.panStartY  = this.pinchCenterY;
-                // 確保第二根手指的 pointermove 也能送到 canvas
-                this.canvas.setPointerCapture(e.pointerId);
-                return;
-            }
+        // -- Canvas pointer events (Device Layer via CanvasInputHandler) --------
+        this._canvasInput = new CanvasInputHandler(this);
+        this._canvasInput.bind(this.canvas);
 
-            // 中鍵 → 開始平移
-            if (e.button === 1) {
-                e.preventDefault();
-                this.isPanning     = true;
-                this.panStartX     = e.clientX;
-                this.panStartY     = e.clientY;
-                this.panScrollLeft = this.canvasWrapper.scrollLeft;
-                this.panScrollTop  = this.canvasWrapper.scrollTop;
-                this.canvas.style.cursor = EasyNoteView.CURSOR_GRABBING;
-                return;
-            }
-            if (e.button !== 0) return;
-            if (!e.isPrimary) return;
-
-            // 觸控長按偵測（僅 touch / pen）
-            if (e.pointerType !== 'mouse') {
-                if (this.longPressTimer) clearTimeout(this.longPressTimer);
-                this.longPressStartX = e.clientX;
-                this.longPressStartY = e.clientY;
-                this.longPressTimer  = setTimeout(() => {
-                    this.longPressTimer = null;
-                    const { x: lmx, y: lmy } = this.toCanvasCoords(
-                        { clientX: this.longPressStartX, clientY: this.longPressStartY } as PointerEvent);
-                    this.handleLongPress(lmx, lmy, this.longPressStartX, this.longPressStartY);
-                }, EasyNoteView.LONG_PRESS_MS);
-            }
-
-            this.canvas.setPointerCapture(e.pointerId);
-            const { x: mx, y: my } = this.toCanvasCoords(e);
-
-            // 平移鎖定模式：單指單點也當作平移，不觸發任何圖層操作
-            if (this.tool === 'pan') {
-                this.isPanning     = true;
-                this.panStartX     = e.clientX;
-                this.panStartY     = e.clientY;
-                this.panScrollLeft = this.canvasWrapper.scrollLeft;
-                this.panScrollTop  = this.canvasWrapper.scrollTop;
-                this.canvas.style.cursor = EasyNoteView.CURSOR_GRABBING;
-                return;
-            }
-
-            if (this.tool === 'text') {
-                // Android：阻止瀏覽器預設的觸控焦點行為，避免與手動 focus() 競爭
-                e.preventDefault();
-                // 文字工具：搜尋是否點到已有文字圖層
-                let hitTextIdx = -1;
-                for (let i = this.textLayers.length - 1; i >= 0; i--) {
-                    if (this.pointInText(mx, my, this.textLayers[i])) { hitTextIdx = i; break; }
-                }
-                this.openTextEditor(mx, my, hitTextIdx);
-                return;
-            } else if (this.tool === 'paintselect') {
-                if (this.paintFragment) {
-                    // 有 fragment：檢查控點 / 內部變鑑 / 外部 confirm
-                    const h = this.hitFragHandle(mx, my);
-                    if (h) {
-                        const frag = this.paintFragment;
-                        const rot  = frag.rotation || 0;
-                        if (h === 'rotate') {
-                            const cx = frag.x + frag.w / 2, cy = frag.y + frag.h / 2;
-                            this.paintFragDrag = {
-                                handle: 'rotate', startMX: mx, startMY: my,
-                                startX: frag.x, startY: frag.y,
-                                startW: frag.w, startH: frag.h,
-                                startRotation: rot, centerX: cx, centerY: cy,
-                                startAngle: Math.atan2(my - cy, mx - cx),
-                            };
-                        } else {
-                            this.paintFragDrag = {
-                                handle: h, startMX: mx, startMY: my,
-                                startX: frag.x, startY: frag.y,
-                                startW: frag.w, startH: frag.h,
-                            };
-                        }
-                    } else if (this.pointInFrag(mx, my)) {
-                        this.paintFragDrag = {
-                            handle: 'move', startMX: mx, startMY: my,
-                            startX: this.paintFragment.x, startY: this.paintFragment.y,
-                            startW: this.paintFragment.w, startH: this.paintFragment.h,
-                        };
-                    } else {
-                        // 點選外部 → 先確認当前再開始新選框
-                        this.commitFragment();
-                        this.selStart   = { x: mx, y: my };
-                        this.selCurrent = { x: mx, y: my };
-                    }
-                } else {
-                    // 開始拖曳新選框
-                    this.selStart   = { x: mx, y: my };
-                    this.selCurrent = { x: mx, y: my };
-                }
-            } else if (this.tool === 'select') {
-                // ── 多圖層選取（multi-select group）優先處理 ────────────────
-                if (this.multiSel) {
-                    const mh = this.hitMultiSelHandle(mx, my);
-                    if (mh) {
-                        this.pushHistory('縮放群組圖層');
-                        const bbox = this.getMultiSelBBox()!;
-                        this.multiSelDrag = {
-                            handle: mh, startMX: mx, startMY: my, startBBox: { ...bbox },
-                            snapImages: this.multiSel.imageIdxs.map(i => ({ ...this.imageLayers[i] })),
-                            snapTexts:  this.multiSel.textIdxs.map(i => ({ x: this.textLayers[i].x, y: this.textLayers[i].y, fontSize: this.textLayers[i].fontSize })),
-                            snapMds:    this.multiSel.mdIdxs.map(i => ({ x: this.markdownLayers[i].x, y: this.markdownLayers[i].y, fontSize: this.markdownLayers[i].fontSize, width: this.markdownLayers[i].width })),
-                        };
-                        return;
-                    }
-                    if (this.pointInMultiSelBBox(mx, my)) {
-                        this.pushHistory('移動群組圖層');
-                        const bbox = this.getMultiSelBBox()!;
-                        this.multiSelDrag = {
-                            handle: 'move', startMX: mx, startMY: my, startBBox: { ...bbox },
-                            snapImages: this.multiSel.imageIdxs.map(i => ({ ...this.imageLayers[i] })),
-                            snapTexts:  this.multiSel.textIdxs.map(i => ({ x: this.textLayers[i].x, y: this.textLayers[i].y, fontSize: this.textLayers[i].fontSize })),
-                            snapMds:    this.multiSel.mdIdxs.map(i => ({ x: this.markdownLayers[i].x, y: this.markdownLayers[i].y, fontSize: this.markdownLayers[i].fontSize, width: this.markdownLayers[i].width })),
-                        };
-                        return;
-                    }
-                    // 點擊群組外 → 解除群組選取，繼續後續判斷
-                    this.multiSel = null;
-                    this.multiSelDrag = null;
-                }
-                // ── [[Wikilink]] 點擊 → 在 Obsidian 開啟筆記 ──────────────────
-                const wikilinkHit = this.getWikilinkAt(mx, my);
-                if (wikilinkHit) {
-                    this.app.workspace.openLinkText(wikilinkHit, '');
-                    return;
-                }
-                // 先檢查文字圖層（文字層在繪畫層下方）
-                let hitText = -1;
-                for (let i = this.textLayers.length - 1; i >= 0; i--) {
-                    if (this.pointInText(mx, my, this.textLayers[i])) { hitText = i; break; }
-                }
-                // 如已選取文字圖層，先檢查控點是否被點擊
-                if (this.selectedTextIdx >= 0) {
-                    const h = this.hitTextHandle(mx, my, this.textLayers[this.selectedTextIdx]);
-                    if (h) {
-                        const tl = this.textLayers[this.selectedTextIdx];
-                        const b  = this.textBBox(tl);
-                        this.pushHistory('縮放文字圖層');  // 拖曳彈物層前先存快照
-                        this.textDragState = {
-                            handle: h, startMX: mx, startMY: my,
-                            startX: tl.x, startY: tl.y,
-                            startFontSize: tl.fontSize, startW: b.w, startH: b.h,
-                        };
-                        return;
-                    }
-                }
-                if (hitText >= 0) {
-                    this.selectedTextIdx = hitText;
-                    this.selectedIdx     = -1;
-                    this.selectedMdIdx   = -1;
-                    this.dragState       = null;
-                    this.mdDragState     = null;
-                    const tl = this.textLayers[hitText];
-                    this.textColorInput.value = tl.color;
-                    const b  = this.textBBox(tl);
-                    this.pushHistory('移動文字圖層');  // 移動文字圖層前先存快照
-                    this.textDragState = {
-                        handle: 'move', startMX: mx, startMY: my,
-                        startX: tl.x, startY: tl.y,
-                        startFontSize: tl.fontSize, startW: b.w, startH: b.h,
-                    };
-                    this.render();
-                    return;
-                }
-                // 檢查 Markdown 圖層（已選取的先檢查控點）
-                if (this.selectedMdIdx >= 0 && this.selectedMdIdx < this.markdownLayers.length) {
-                    const h = this.hitMdHandle(mx, my, this.markdownLayers[this.selectedMdIdx]);
-                    if (h) {
-                        const ml  = this.markdownLayers[this.selectedMdIdx];
-                        const b   = this.mdBBox(ml);
-                        const rot = ml.rotation || 0;
-                        if (h === 'rotate') {
-                            this.pushHistory('旋轉 Markdown 圖層');
-                            const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
-                            this.mdDragState = {
-                                handle: 'rotate', startMX: mx, startMY: my,
-                                startX: ml.x, startY: ml.y,
-                                startFontSize: ml.fontSize, startWidth: ml.width, startH: b.h,
-                                startRotation: rot, centerX: cx, centerY: cy,
-                                startAngle: Math.atan2(my - cy, mx - cx),
-                            };
-                        } else {
-                            this.pushHistory('縮放 Markdown 圖層');
-                            this.mdDragState = {
-                                handle: h, startMX: mx, startMY: my,
-                                startX: ml.x, startY: ml.y,
-                                startFontSize: ml.fontSize, startWidth: ml.width, startH: b.h,
-                            };
-                        }
-                        return;
-                    }
-                }
-                let hitMd = -1;
-                for (let i = this.markdownLayers.length - 1; i >= 0; i--) {
-                    if (this.pointInMd(mx, my, this.markdownLayers[i])) { hitMd = i; break; }
-                }
-                if (hitMd >= 0) {
-                    // [[Wikilink]] 點擊 → 在 Obsidian 開啟筆記
-                    const mdWikilink = this.getMdWikilinkAt(mx, my);
-                    if (mdWikilink) {
-                        this.app.workspace.openLinkText(mdWikilink, '');
-                        return;
-                    }
-                    // [text](url) 超連結點擊 → 在瀏覽器開啟
-                    const mdUrl = this.getMdUrlAt(mx, my);
-                    if (mdUrl) {
-                        (this.app as any).openUrl
-                            ? (this.app as any).openUrl(mdUrl)
-                            : window.open(mdUrl, '_blank');
-                        return;
-                    }
-                    this.selectedMdIdx   = hitMd;
-                    this.selectedIdx     = -1;
-                    this.selectedTextIdx = -1;
-                    this.dragState       = null;
-                    this.textDragState   = null;
-                    const ml = this.markdownLayers[hitMd];
-                    const b  = this.mdBBox(ml);
-                    this.pushHistory('移動 Markdown 圖層');
-                    this.mdDragState = {
-                        handle: 'move', startMX: mx, startMY: my,
-                        startX: ml.x, startY: ml.y,
-                        startFontSize: ml.fontSize, startWidth: ml.width, startH: b.h,
-                    };
-                    this.render();
-                    return;
-                }
-                // 先檢查是否點到控點
-                if (this.selectedIdx >= 0) {
-                    const h = this.hitHandle(mx, my, this.imageLayers[this.selectedIdx]);
-                    if (h) {
-                        const lay = this.imageLayers[this.selectedIdx];
-                        const rot = lay.rotation || 0;
-                        if (h === 'rotate') {
-                            this.pushHistory('旋轉圖片圖層');
-                            const cx = lay.x + lay.w / 2, cy = lay.y + lay.h / 2;
-                            this.dragState = {
-                                handle: 'rotate', startMX: mx, startMY: my,
-                                startX: lay.x, startY: lay.y, startW: lay.w, startH: lay.h,
-                                startRotation: rot, centerX: cx, centerY: cy,
-                                startAngle: Math.atan2(my - cy, mx - cx),
-                            };
-                        } else {
-                            this.pushHistory('縮放圖片圖層');  // 縮放圖片層前先存快照
-                            this.dragState = { handle: h, startMX: mx, startMY: my,
-                                startX: lay.x, startY: lay.y, startW: lay.w, startH: lay.h };
-                        }
-                        return;
-                    }
-                }
-                // 點到哪個圖片圖層？（由上到下）
-                let hit = -1;
-                for (let i = this.imageLayers.length - 1; i >= 0; i--) {
-                    if (this.pointInLayer(mx, my, this.imageLayers[i])) { hit = i; break; }
-                }
-                if (hit >= 0) {
-                    this.selectedIdx     = hit;
-                    this.selectedTextIdx = -1;
-                    this.selectedMdIdx   = -1;
-                    const lay = this.imageLayers[hit];
-                    this.pushHistory('移動圖片圖層');  // 移動圖片層前先存快照
-                    this.dragState = { handle: 'move', startMX: mx, startMY: my,
-                        startX: lay.x, startY: lay.y, startW: lay.w, startH: lay.h };
-                } else {
-                    // 空白處 → 開始圈選拖曳框
-                    this.selectedIdx     = -1;
-                    this.selectedTextIdx = -1;
-                    this.selectedMdIdx   = -1;
-                    this.imgSelStart   = { x: mx, y: my };
-                    this.imgSelCurrent = { x: mx, y: my };
-                }
-                this.render();
-            } else {
-                // 畫筆 / 橡皮擦
-                // stroke-layer 模式下橡皮擦：壓著滑過即刪除所有觸及的圖層
-                if (this.settings.brushMode === 'stroke-layer' && this.eraser) {
-                    this.pushHistory('橡皮擦（圖層）');
-                    this.drawing = true;  // 讓 pointermove 持續觸發擦除
-                    this._eraseLayerAt(mx, my);
-                    return;
-                }
-                this.pushHistory(this.eraser ? '橡皮擦' : '筆觸');  // 每次筆觸開始前保存快照
-                this.drawing = true;
-                this.prevX = mx; this.prevY = my;
-                this.initViewportCache();  // 初始化 viewport paint cache
-                this.paintDot(mx, my);
-            }
-        });
-
-        this.canvas.addEventListener('pointermove', (e) => {
-            // 更新此 pointer 的位置
-            if (this.activePointers.has(e.pointerId)) {
-                this.activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-            }
-
-            // 自訂游標 dot（draw 模式顯示筆刷顏色圓圈）
-            if (e.pointerType === 'mouse') this.updateCustomCursor(e);
-
-            // 雙指（含）以上：pinch-to-zoom + 平移
-            if (this.activePointers.size >= 2) {
-                const ptrs = [...this.activePointers.values()];
-                const cx = (ptrs[0].x + ptrs[1].x) / 2;
-                const cy = (ptrs[0].y + ptrs[1].y) / 2;
-                // 縮放（以當前雙指中心為 pivot，每幀重算，避免跳動）
-                if (this.pinchStartDist && this.pinchStartZoom !== null) {
-                    const ddx  = ptrs[1].x - ptrs[0].x;
-                    const ddy  = ptrs[1].y - ptrs[0].y;
-                    const dist = Math.hypot(ddx, ddy);
-                    const MIN_ZOOM = 0.1, MAX_ZOOM = 8.0;
-                    const newZoom  = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM,
-                        this.pinchStartZoom * (dist / this.pinchStartDist)));
-                    const wRect  = this.canvasWrapper.getBoundingClientRect();
-                    const pivotX = cx - wRect.left;
-                    const pivotY = cy - wRect.top;
-                    const ratio  = newZoom / this.zoom;
-                    // 在 applyZoom 前先快照 scroll，避免瀏覽器 resize 後自動修改 scrollLeft
-                    const prevSL = this.canvasWrapper.scrollLeft;
-                    const prevST = this.canvasWrapper.scrollTop;
-                    this.zoom = newZoom;
-                    this.applyZoom();
-                    this.canvasWrapper.scrollLeft = (prevSL + pivotX) * ratio - pivotX;
-                    this.canvasWrapper.scrollTop  = (prevST + pivotY) * ratio - pivotY;
-                    this.refreshStatus();
-                }
-                // 雙指平移：增量方式，疊加在縮放後的 scroll 上，避免互相覆蓋
-                this.canvasWrapper.scrollLeft -= (cx - this.panStartX);
-                this.canvasWrapper.scrollTop  -= (cy - this.panStartY);
-                // 更新基準點供下一幀使用
-                this.panStartX = cx;
-                this.panStartY = cy;
-                return;
-            }
-
-            // 中鍵 / 單指平移
-            if (this.isPanning) {
-                this.canvasWrapper.scrollLeft = this.panScrollLeft - (e.clientX - this.panStartX);
-                this.canvasWrapper.scrollTop  = this.panScrollTop  - (e.clientY - this.panStartY);
-                return;
-            }
-            // 雙指手勢結束後殘餘單指 → 忽略，避免跳位或誤觸
-            if (this.gestureActive) return;
-            if (!e.isPrimary) return;
-
-            // 手指移動超出 slop → 取消長按
-            if (this.longPressTimer) {
-                const dx = e.clientX - this.longPressStartX;
-                const dy = e.clientY - this.longPressStartY;
-                if (Math.hypot(dx, dy) > EasyNoteView.LONG_PRESS_SLOP) {
-                    clearTimeout(this.longPressTimer);
-                    this.longPressTimer = null;
-                }
-            }
-
-            const { x: mx, y: my } = this.toCanvasCoords(e);
-
-            if (this.tool === 'select') {
-                // 更新游標
-                this.updateCursor(mx, my);
-
-                // 多圖層群組拖曳 / 縮放
-                if (this.multiSelDrag && this.multiSel) {
-                    const ds  = this.multiSelDrag;
-                    const dx  = mx - ds.startMX;
-                    const dy  = my - ds.startMY;
-                    if (ds.handle === 'move') {
-                        for (let k = 0; k < this.multiSel.imageIdxs.length; k++) {
-                            const i = this.multiSel.imageIdxs[k];
-                            this.imageLayers[i].x = ds.snapImages[k].x + dx;
-                            this.imageLayers[i].y = ds.snapImages[k].y + dy;
-                        }
-                        for (let k = 0; k < this.multiSel.textIdxs.length; k++) {
-                            const i = this.multiSel.textIdxs[k];
-                            this.textLayers[i].x = ds.snapTexts[k].x + dx;
-                            this.textLayers[i].y = ds.snapTexts[k].y + dy;
-                        }
-                        for (let k = 0; k < this.multiSel.mdIdxs.length; k++) {
-                            const i = this.multiSel.mdIdxs[k];
-                            this.markdownLayers[i].x = ds.snapMds[k].x + dx;
-                            this.markdownLayers[i].y = ds.snapMds[k].y + dy;
-                            this.markdownLayers[i]._cachedH = undefined;
-                        }
-                    } else {
-                        // 縮放：以對角為錨點，等比例縮放所有圖層
-                        const b = ds.startBBox;
-                        let anchorX: number, anchorY: number, newW: number, newH: number;
-                        if (ds.handle === 'nw') {
-                            anchorX = b.x + b.w; anchorY = b.y + b.h;
-                            newW = Math.max(10, anchorX - mx); newH = Math.max(10, anchorY - my);
-                        } else if (ds.handle === 'ne') {
-                            anchorX = b.x; anchorY = b.y + b.h;
-                            newW = Math.max(10, mx - anchorX); newH = Math.max(10, anchorY - my);
-                        } else if (ds.handle === 'sw') {
-                            anchorX = b.x + b.w; anchorY = b.y;
-                            newW = Math.max(10, anchorX - mx); newH = Math.max(10, my - anchorY);
-                        } else { // se
-                            anchorX = b.x; anchorY = b.y;
-                            newW = Math.max(10, mx - anchorX); newH = Math.max(10, my - anchorY);
-                        }
-                        if (e.shiftKey) {
-                            const sc = Math.min(newW / b.w, newH / b.h);
-                            newW = sc * b.w; newH = sc * b.h;
-                        }
-                        const sx = newW / b.w, sy = newH / b.h;
-                        for (let k = 0; k < this.multiSel.imageIdxs.length; k++) {
-                            const i  = this.multiSel.imageIdxs[k];
-                            const s  = ds.snapImages[k];
-                            this.imageLayers[i].x = anchorX + (s.x - anchorX) * sx;
-                            this.imageLayers[i].y = anchorY + (s.y - anchorY) * sy;
-                            this.imageLayers[i].w = Math.max(1, s.w * sx);
-                            this.imageLayers[i].h = Math.max(1, s.h * sy);
-                        }
-                        for (let k = 0; k < this.multiSel.textIdxs.length; k++) {
-                            const i = this.multiSel.textIdxs[k];
-                            const s = ds.snapTexts[k];
-                            this.textLayers[i].x = anchorX + (s.x - anchorX) * sx;
-                            this.textLayers[i].y = anchorY + (s.y - anchorY) * sy;
-                            this.textLayers[i].fontSize = Math.max(8, s.fontSize * (sx + sy) / 2);
-                        }
-                        for (let k = 0; k < this.multiSel.mdIdxs.length; k++) {
-                            const i = this.multiSel.mdIdxs[k];
-                            const s = ds.snapMds[k];
-                            this.markdownLayers[i].x = anchorX + (s.x - anchorX) * sx;
-                            this.markdownLayers[i].y = anchorY + (s.y - anchorY) * sy;
-                            this.markdownLayers[i].fontSize = Math.max(8, s.fontSize * sx);
-                            this.markdownLayers[i].width    = Math.max(40, s.width * sx);
-                            this.markdownLayers[i]._cachedH = undefined;
-                        }
-                    }
-                    this.render();
-                    return;
-                }
-
-                // 圈選橡皮筋框更新
-                if (this.imgSelStart) {
-                    this.imgSelCurrent = { x: mx, y: my };
-                    this.render();
-                    return;
-                }
-
-                // Markdown 拖曳 / 縮放
-                if (this.mdDragState && this.selectedMdIdx >= 0) {
-                    const md  = this.mdDragState;
-                    const ml  = this.markdownLayers[this.selectedMdIdx];
-                    const dx  = mx - md.startMX;
-                    const MIN_FONT  = 8;
-                    const MIN_WIDTH = 40;
-                    if (md.handle === 'rotate') {
-                        const angle = Math.atan2(my - md.centerY!, mx - md.centerX!);
-                        let rot = md.startRotation! + (angle - md.startAngle!);
-                        if (e.shiftKey) { const snap = Math.PI / 12; rot = Math.round(rot / snap) * snap; }
-                        ml.rotation = rot;
-                        ml._cachedH = undefined;
-                        this.render(); return;
-                    } else if (md.handle === 'move') {
-                        ml.x = md.startX + dx;
-                        ml.y = md.startY + (my - md.startMY);
-                    } else if (md.handle === 'se') {
-                        const nw    = Math.max(MIN_WIDTH, md.startWidth + dx);
-                        const scale = nw / md.startWidth;
-                        ml.fontSize = Math.max(MIN_FONT, md.startFontSize * scale);
-                        ml.width    = nw;
-                    } else if (md.handle === 'ne') {
-                        const nw    = Math.max(MIN_WIDTH, md.startWidth + dx);
-                        const scale = nw / md.startWidth;
-                        ml.fontSize = Math.max(MIN_FONT, md.startFontSize * scale);
-                        ml.width    = nw;
-                        ml.y        = md.startY + (md.startH - md.startH * scale);
-                    } else if (md.handle === 'sw') {
-                        const nw    = Math.max(MIN_WIDTH, md.startWidth - dx);
-                        const scale = nw / md.startWidth;
-                        ml.fontSize = Math.max(MIN_FONT, md.startFontSize * scale);
-                        ml.width    = nw;
-                        ml.x        = md.startX + (md.startWidth - nw);
-                    } else { // nw
-                        const nw    = Math.max(MIN_WIDTH, md.startWidth - dx);
-                        const scale = nw / md.startWidth;
-                        ml.fontSize = Math.max(MIN_FONT, md.startFontSize * scale);
-                        ml.width    = nw;
-                        ml.x        = md.startX + (md.startWidth - nw);
-                        ml.y        = md.startY + (md.startH - md.startH * scale);
-                    }
-                    ml._cachedH = undefined;
-                    this.render();
-                    return;
-                }
-
-                // 文字拖曳 / 縮放
-                if (this.textDragState && this.selectedTextIdx >= 0) {
-                    const td  = this.textDragState;
-                    const tl  = this.textLayers[this.selectedTextIdx];
-                    const dx  = mx - td.startMX;
-                    const dy  = my - td.startMY;
-                    const MIN_FONT = 8;
-                    const minW     = td.startW * (MIN_FONT / td.startFontSize);
-
-                    if (td.handle === 'rotate') {
-                        const angle = Math.atan2(my - td.centerY!, mx - td.centerX!);
-                        let rot = td.startRotation! + (angle - td.startAngle!);
-                        if (e.shiftKey || this.proportionalScale) { const snap = Math.PI / 12; rot = Math.round(rot / snap) * snap; }
-                        tl.rotation = rot;
-                        this.render(); return;
-                    } else if (td.handle === 'move') {
-                        tl.x = td.startX + dx;
-                        tl.y = td.startY + dy;
-                    } else if (td.handle === 'nw') {
-                        const nw    = Math.max(minW, td.startW - dx);
-                        const scale = nw / td.startW;
-                        tl.fontSize = Math.max(MIN_FONT, td.startFontSize * scale);
-                        tl.x = td.startX + (td.startW - nw);
-                        tl.y = td.startY + (td.startH - td.startH * scale);
-                    } else if (td.handle === 'ne') {
-                        const nw    = Math.max(minW, td.startW + dx);
-                        const scale = nw / td.startW;
-                        tl.fontSize = Math.max(MIN_FONT, td.startFontSize * scale);
-                        tl.y = td.startY + (td.startH - td.startH * scale);
-                    } else if (td.handle === 'sw') {
-                        const nw    = Math.max(minW, td.startW - dx);
-                        const scale = nw / td.startW;
-                        tl.fontSize = Math.max(MIN_FONT, td.startFontSize * scale);
-                        tl.x = td.startX + (td.startW - nw);
-                    } else { // se
-                        const nw    = Math.max(minW, td.startW + dx);
-                        const scale = nw / td.startW;
-                        tl.fontSize = Math.max(MIN_FONT, td.startFontSize * scale);
-                    }
-                    this.render();
-                    return;
-                }
-
-                if (this.dragState) {
-                    const ds    = this.dragState;
-                    const dx    = mx - ds.startMX;
-                    const dy    = my - ds.startMY;
-                    const lay   = this.imageLayers[this.selectedIdx];
-                    const ratio = ds.startW / ds.startH;  // 原始長寬比
-
-                    if (ds.handle === 'rotate') {
-                        const angle = Math.atan2(my - ds.centerY!, mx - ds.centerX!);
-                        let rot = ds.startRotation! + (angle - ds.startAngle!);
-                        if (e.shiftKey || this.proportionalScale) { const snap = Math.PI / 12; rot = Math.round(rot / snap) * snap; }
-                        lay.rotation = rot;
-                        this.render(); return;
-                    } else if (ds.handle === 'move') {
-                        lay.x = ds.startX + dx;
-                        lay.y = ds.startY + dy;
-                    } else {
-                        // 縮放：各角拖曳改變 x/y/w/h
-                        const MIN = 20;
-                        if (ds.handle === 'nw') {
-                            let nw = Math.max(MIN, ds.startW - dx);
-                            let nh = Math.max(MIN, ds.startH - dy);
-                            if (e.shiftKey || this.proportionalScale) {
-                                const scale = Math.max((ds.startW - dx) / ds.startW, (ds.startH - dy) / ds.startH);
-                                nw = Math.max(MIN, ds.startW * scale);
-                                nh = Math.max(MIN, nw / ratio);
-                            }
-                            lay.x = ds.startX + (ds.startW - nw);
-                            lay.y = ds.startY + (ds.startH - nh);
-                            lay.w = nw; lay.h = nh;
-                        } else if (ds.handle === 'ne') {
-                            let nw = Math.max(MIN, ds.startW + dx);
-                            let nh = Math.max(MIN, ds.startH - dy);
-                            if (e.shiftKey || this.proportionalScale) {
-                                const scale = Math.max((ds.startW + dx) / ds.startW, (ds.startH - dy) / ds.startH);
-                                nw = Math.max(MIN, ds.startW * scale);
-                                nh = Math.max(MIN, nw / ratio);
-                            }
-                            lay.w = nw;
-                            lay.y = ds.startY + (ds.startH - nh);
-                            lay.h = nh;
-                        } else if (ds.handle === 'sw') {
-                            let nw = Math.max(MIN, ds.startW - dx);
-                            let nh = Math.max(MIN, ds.startH + dy);
-                            if (e.shiftKey || this.proportionalScale) {
-                                const scale = Math.max((ds.startW - dx) / ds.startW, (ds.startH + dy) / ds.startH);
-                                nw = Math.max(MIN, ds.startW * scale);
-                                nh = Math.max(MIN, nw / ratio);
-                            }
-                            lay.x = ds.startX + (ds.startW - nw);
-                            lay.w = nw; lay.h = nh;
-                        } else { // se
-                            let nw = Math.max(MIN, ds.startW + dx);
-                            let nh = Math.max(MIN, ds.startH + dy);
-                            if (e.shiftKey || this.proportionalScale) {
-                                const scale = Math.max((ds.startW + dx) / ds.startW, (ds.startH + dy) / ds.startH);
-                                nw = Math.max(MIN, ds.startW * scale);
-                                nh = Math.max(MIN, nw / ratio);
-                            }
-                            lay.w = nw; lay.h = nh;
-                        }
-                    }
-                    this.render();
-                }
-            } else if (this.drawing) {
-                // stroke-layer 橡皮擦：滑過時持續擦除
-                if (this.settings.brushMode === 'stroke-layer' && this.eraser) {
-                    this._eraseLayerAt(mx, my);
-                    return;
-                }
-                // 使用 getCoalescedEvents 取回所有被合併的中間點，
-                // 避免大畫布在 Android 上因事件節流導致曲線退化成直線
-                const coalesced = (e as PointerEvent).getCoalescedEvents?.() ?? [e];
-                for (const ce of coalesced) {
-                    const { x: cpx, y: cpy } = this.toCanvasCoords(ce as PointerEvent);
-                    this.paintStroke(this.prevX, this.prevY, cpx, cpy);
-                    this.prevX = cpx; this.prevY = cpy;
-                }
-            } else if (this.tool === 'paintselect') {
-                if (this.paintFragDrag && this.paintFragment) {
-                    const ds    = this.paintFragDrag;
-                    const dx    = mx - ds.startMX;
-                    const dy    = my - ds.startMY;
-                    const frag  = this.paintFragment;
-                    const ratio = ds.startW / ds.startH;
-                    const MIN   = 10;
-                    if (ds.handle === 'rotate') {
-                        const angle = Math.atan2(my - ds.centerY!, mx - ds.centerX!);
-                        let rot = ds.startRotation! + (angle - ds.startAngle!);
-                        if (e.shiftKey || this.proportionalScale) { const snap = Math.PI / 12; rot = Math.round(rot / snap) * snap; }
-                        frag.rotation = rot;
-                    } else if (ds.handle === 'move') {
-                        frag.x = ds.startX + dx;
-                        frag.y = ds.startY + dy;
-                    } else if (ds.handle === 'nw') {
-                        let nw = Math.max(MIN, ds.startW - dx);
-                        let nh = Math.max(MIN, ds.startH - dy);
-                        if (e.shiftKey || this.proportionalScale) { const sc = Math.max((ds.startW-dx)/ds.startW,(ds.startH-dy)/ds.startH); nw=Math.max(MIN,ds.startW*sc); nh=nw/ratio; }
-                        frag.x = ds.startX + (ds.startW - nw); frag.y = ds.startY + (ds.startH - nh); frag.w = nw; frag.h = nh;
-                    } else if (ds.handle === 'ne') {
-                        let nw = Math.max(MIN, ds.startW + dx);
-                        let nh = Math.max(MIN, ds.startH - dy);
-                        if (e.shiftKey || this.proportionalScale) { const sc = Math.max((ds.startW+dx)/ds.startW,(ds.startH-dy)/ds.startH); nw=Math.max(MIN,ds.startW*sc); nh=nw/ratio; }
-                        frag.w = nw; frag.y = ds.startY + (ds.startH - nh); frag.h = nh;
-                    } else if (ds.handle === 'sw') {
-                        let nw = Math.max(MIN, ds.startW - dx);
-                        let nh = Math.max(MIN, ds.startH + dy);
-                        if (e.shiftKey || this.proportionalScale) { const sc = Math.max((ds.startW-dx)/ds.startW,(ds.startH+dy)/ds.startH); nw=Math.max(MIN,ds.startW*sc); nh=nw/ratio; }
-                        frag.x = ds.startX + (ds.startW - nw); frag.w = nw; frag.h = nh;
-                    } else { // se
-                        let nw = Math.max(MIN, ds.startW + dx);
-                        let nh = Math.max(MIN, ds.startH + dy);
-                        if (e.shiftKey || this.proportionalScale) { const sc = Math.max((ds.startW+dx)/ds.startW,(ds.startH+dy)/ds.startH); nw=Math.max(MIN,ds.startW*sc); nh=nw/ratio; }
-                        frag.w = nw; frag.h = nh;
-                    }
-                    this.render();
-                } else if (this.selStart) {
-                    this.selCurrent = { x: mx, y: my };
-                    this.render();
-                } else {
-                    // 更新游標
-                    if (this.hitFragHandle(mx, my)) {
-                        this.canvas.style.cursor = 'nwse-resize';
-                    } else if (this.pointInFrag(mx, my)) {
-                        this.canvas.style.cursor = 'move';
-                    } else {
-                        this.canvas.style.cursor = EasyNoteView.CURSOR_CROSSHAIR;
-                    }
-                }
-            }
-
-        });
-
-        this.canvas.addEventListener('pointerup', (e) => {
-            this.activePointers.delete(e.pointerId);
-            // 手指抬起 → 取消長按計時器
-            if (this.longPressTimer) {
-                clearTimeout(this.longPressTimer);
-                this.longPressTimer = null;
-            }
-            // 雙指結束 → 重設 pinch 狀態
-            if (this.activePointers.size < 2) {
-                this.pinchStartDist = null;
-                this.pinchStartZoom = null;
-                this.pinchCenterX   = null;
-                this.pinchCenterY   = null;
-                // 中止雙指平移，殘餘單指不應觸發單指平移（panScrollLeft 已過期）
-                this.isPanning = false;
-            }
-            // 三指→雙指：以剩餘兩指重新初始化 pinch 基準，避免跳動
-            if (this.activePointers.size === 2) {
-                const ptrs2 = [...this.activePointers.values()];
-                const dx2   = ptrs2[1].x - ptrs2[0].x;
-                const dy2   = ptrs2[1].y - ptrs2[0].y;
-                this.pinchStartDist = Math.hypot(dx2, dy2);
-                this.pinchStartZoom = this.zoom;
-                this.panStartX = (ptrs2[0].x + ptrs2[1].x) / 2;
-                this.panStartY = (ptrs2[0].y + ptrs2[1].y) / 2;
-            }
-            if (this.activePointers.size === 1) {
-                // 有殘餘手指 → 標記手勢仍活躍，pointermove 將忽略它
-                this.gestureActive = true;
-            }
-            if (this.activePointers.size === 0) {
-                this.gestureActive = false;
-            }
-            if (e.button === 1) {
-                this.isPanning = false;
-                this.canvas.style.cursor = this.tool === 'draw' ? 'crosshair' : (this.tool === 'text' ? EasyNoteView.CURSOR_TEXT : (this.tool === 'paintselect' ? EasyNoteView.CURSOR_CROSSHAIR : (this.tool === 'pan' ? EasyNoteView.CURSOR_GRAB : 'default')));
-                return;
-            }
-            if (this.tool === 'paintselect') {
-                if (this.selStart) {
-                    const rect = this.getSelRect();
-                    if (rect) this.extractFragment(rect);
-                    this.selStart   = null;
-                    this.selCurrent = null;
-                    if (!rect) this.render();
-                }
-                this.paintFragDrag = null;
-                return;
-            }
-            // 圖層圈選（rubber-band）結束 → 計算 multiSel
-            if (this.tool === 'select' && this.imgSelStart && this.imgSelCurrent) {
-                const x1 = Math.min(this.imgSelStart.x, this.imgSelCurrent.x);
-                const y1 = Math.min(this.imgSelStart.y, this.imgSelCurrent.y);
-                const x2 = Math.max(this.imgSelStart.x, this.imgSelCurrent.x);
-                const y2 = Math.max(this.imgSelStart.y, this.imgSelCurrent.y);
-                this.imgSelStart   = null;
-                this.imgSelCurrent = null;
-                if (x2 - x1 > 5 && y2 - y1 > 5) {
-                    const imageIdxs = this.imageLayers.reduce((acc, l, i) => {
-                        if (l.x + l.w > x1 && l.x < x2 && l.y + l.h > y1 && l.y < y2) acc.push(i);
-                        return acc;
-                    }, [] as number[]);
-                    const textIdxs = this.textLayers.reduce((acc, tl, i) => {
-                        const b = this.textBBox(tl);
-                        if (b.x + b.w > x1 && b.x < x2 && b.y + b.h > y1 && b.y < y2) acc.push(i);
-                        return acc;
-                    }, [] as number[]);
-                    const mdIdxs = this.markdownLayers.reduce((acc, ml, i) => {
-                        const b = this.mdBBox(ml);
-                        if (b.x + b.w > x1 && b.x < x2 && b.y + b.h > y1 && b.y < y2) acc.push(i);
-                        return acc;
-                    }, [] as number[]);
-                    const total = imageIdxs.length + textIdxs.length + mdIdxs.length;
-                    if (total > 1) {
-                        this.multiSel = { imageIdxs, textIdxs, mdIdxs };
-                        this.selectedIdx = -1; this.selectedTextIdx = -1; this.selectedMdIdx = -1;
-                    } else if (imageIdxs.length === 1) {
-                        this.selectedIdx = imageIdxs[0];
-                    } else if (textIdxs.length === 1) {
-                        this.selectedTextIdx = textIdxs[0];
-                    } else if (mdIdxs.length === 1) {
-                        this.selectedMdIdx = mdIdxs[0];
-                    }
-                }
-                this.multiSelDrag = null;
-                this.render();
-                return;
-            }
-            this.multiSelDrag  = null;
-            this.drawing       = false;
-            this._vpCache      = null;  // 清除 viewport cache，觸發下一次完整渲染
-            this.dragState     = null;
-            this.textDragState = null;
-            this.mdDragState   = null;
-            // stroke-layer 模式：筆觸結束，提交為圖片圖層
-            if (this.settings.brushMode === 'stroke-layer' && !this.eraser) {
-                this.commitStrokeAsLayer();
-            }
-            this.scheduleRender();  // 筆觸結束後確保以完整畫布合成一次, (e) => {
-            this.activePointers.delete(e.pointerId);
-            if (this.longPressTimer) { clearTimeout(this.longPressTimer); this.longPressTimer = null; }
-            if (this.activePointers.size === 0) {
-                this.isPanning     = false;
-                this.pinchStartDist = null;
-                this.pinchStartZoom = null;
-            }
-        });
-        this.canvas.addEventListener('pointerleave', (e) => {
-            if (e.pointerType !== 'mouse') return;  // 觸控滑出由 pointerup/cancel 處理
-            // 隱藏自訂游標 dot，還原系統游標
-            if (this._cursorDot) this._cursorDot.style.display = 'none';
-            if (this.tool === 'draw') this.canvas.style.cursor = '';
-            this.isPanning     = false;
-            if (this.drawing && this.settings.brushMode === 'stroke-layer' && !this.eraser) {
-                this.commitStrokeAsLayer();
-            }
-            this.drawing       = false;
-            this._vpCache      = null;
-            this.dragState     = null;
-            this.textDragState = null;
-            this.mdDragState   = null;
-            this.paintFragDrag = null;
-            if (this.selStart) { this.selStart = null; this.selCurrent = null; this.render(); }
-            this.multiSelDrag = null;
-            if (this.imgSelStart) { this.imgSelStart = null; this.imgSelCurrent = null; this.render(); }
-        });
-
-        // 雙擊選取模式下編輯文字 / Markdown
-        this.canvas.addEventListener('dblclick', (e) => {
-            if (this.tool !== 'select') return;
-            const { x: mx, y: my } = this.toCanvasCoords(e);
-            for (let i = this.markdownLayers.length - 1; i >= 0; i--) {
-                if (this.pointInMd(mx, my, this.markdownLayers[i])) {
-                    this.openMarkdownEditor(i);
-                    return;
-                }
-            }
-            for (let i = this.textLayers.length - 1; i >= 0; i--) {
-                if (this.pointInText(mx, my, this.textLayers[i])) {
-                    this.openTextEditor(this.textLayers[i].x, this.textLayers[i].y, i);
-                    return;
-                }
-            }
-        });
-
-        // 滾輪縮放（Canva 風格，以游標位置為錨點）
         // 拖曳圖片進入
         this.canvas.addEventListener('dragover', (e) => {
             e.preventDefault();
@@ -1717,6 +879,860 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         this.manualWidth  = w;
         this.manualHeight = h;
         this.applyCanvasSize(w, h);
+    }
+
+    // -- Canvas pointer events (Feature Layer implementation) ------------------
+    handlePointerDown(e: PointerEvent): void   { this._onPointerDown(e);  }
+    handlePointerMove(e: PointerEvent): void   { this._onPointerMove(e);  }
+    handlePointerUp(e: PointerEvent): void     { this._onPointerUp(e);    }
+    handlePointerCancel(e: PointerEvent): void { this._onPointerUp(e);    } // same cleanup
+    handlePointerLeave(e: PointerEvent): void  { this._onPointerLeave(e); }
+    handleDblClick(e: MouseEvent): void        { this._onDblClick(e);     }
+    isPaintSelectAvailable(): boolean          { return this.settings.brushMode !== 'stroke-layer'; }
+
+    private _onPointerDown(e: PointerEvent): void {
+        this.activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+        // 雙指觸控 → 切換到平移 / 縮放模式，不執行繪圖
+        // 三指以上：只記錄位置，其餘忽略（避免觸發繪圖 / 跳位）
+        if (this.activePointers.size >= 3) {
+            this.canvas.setPointerCapture(e.pointerId);
+            return;
+        }
+        if (this.activePointers.size === 2) {
+            // 中止任何進行中的繪圖 / 拖曳
+            this.gestureActive = false; // 重新開始雙指手勢，清除殘餘旗標
+            this.drawing       = false;
+            this.dragState     = null;
+            this.textDragState = null;
+            this.mdDragState   = null;
+            this.paintFragDrag = null;
+            this.multiSelDrag  = null;
+            this.imgSelStart   = null;
+            this.imgSelCurrent = null;
+            // 記錄 pinch 起始距離與畫面中心
+            const ptrs = [...this.activePointers.values()];
+            const dx   = ptrs[1].x - ptrs[0].x;
+            const dy   = ptrs[1].y - ptrs[0].y;
+            this.pinchStartDist = Math.hypot(dx, dy);
+            this.pinchStartZoom = this.zoom;
+            this.pinchCenterX   = (ptrs[0].x + ptrs[1].x) / 2;
+            this.pinchCenterY   = (ptrs[0].y + ptrs[1].y) / 2;
+            // 以雙指中心開始平移（增量模式，每幀更新 panStartX/Y）
+            this.isPanning  = true;
+            this.panStartX  = this.pinchCenterX;
+            this.panStartY  = this.pinchCenterY;
+            // 確保第二根手指的 pointermove 也能送到 canvas
+            this.canvas.setPointerCapture(e.pointerId);
+            return;
+        }
+
+        // 中鍵 → 開始平移
+        if (e.button === 1) {
+            e.preventDefault();
+            this.isPanning     = true;
+            this.panStartX     = e.clientX;
+            this.panStartY     = e.clientY;
+            this.panScrollLeft = this.canvasWrapper.scrollLeft;
+            this.panScrollTop  = this.canvasWrapper.scrollTop;
+            this.canvas.style.cursor = EasyNoteView.CURSOR_GRABBING;
+            return;
+        }
+        if (e.button !== 0) return;
+        if (!e.isPrimary) return;
+
+        // 觸控長按偵測（僅 touch / pen）
+        if (e.pointerType !== 'mouse') {
+            if (this.longPressTimer) clearTimeout(this.longPressTimer);
+            this.longPressStartX = e.clientX;
+            this.longPressStartY = e.clientY;
+            this.longPressTimer  = setTimeout(() => {
+                this.longPressTimer = null;
+                const { x: lmx, y: lmy } = this.toCanvasCoords(
+                    { clientX: this.longPressStartX, clientY: this.longPressStartY } as PointerEvent);
+                this.handleLongPress(lmx, lmy, this.longPressStartX, this.longPressStartY);
+            }, EasyNoteView.LONG_PRESS_MS);
+        }
+
+        this.canvas.setPointerCapture(e.pointerId);
+        const { x: mx, y: my } = this.toCanvasCoords(e);
+
+        // 平移鎖定模式：單指單點也當作平移，不觸發任何圖層操作
+        if (this.tool === 'pan') {
+            this.isPanning     = true;
+            this.panStartX     = e.clientX;
+            this.panStartY     = e.clientY;
+            this.panScrollLeft = this.canvasWrapper.scrollLeft;
+            this.panScrollTop  = this.canvasWrapper.scrollTop;
+            this.canvas.style.cursor = EasyNoteView.CURSOR_GRABBING;
+            return;
+        }
+
+        if (this.tool === 'text') {
+            // Android：阻止瀏覽器預設的觸控焦點行為，避免與手動 focus() 競爭
+            e.preventDefault();
+            // 文字工具：搜尋是否點到已有文字圖層
+            let hitTextIdx = -1;
+            for (let i = this.textLayers.length - 1; i >= 0; i--) {
+                if (this.pointInText(mx, my, this.textLayers[i])) { hitTextIdx = i; break; }
+            }
+            this.openTextEditor(mx, my, hitTextIdx);
+            return;
+        } else if (this.tool === 'paintselect') {
+            if (this.paintFragment) {
+                // 有 fragment：檢查控點 / 內部變鑑 / 外部 confirm
+                const h = this.hitFragHandle(mx, my);
+                if (h) {
+                    const frag = this.paintFragment;
+                    const rot  = frag.rotation || 0;
+                    if (h === 'rotate') {
+                        const cx = frag.x + frag.w / 2, cy = frag.y + frag.h / 2;
+                        this.paintFragDrag = {
+                            handle: 'rotate', startMX: mx, startMY: my,
+                            startX: frag.x, startY: frag.y,
+                            startW: frag.w, startH: frag.h,
+                            startRotation: rot, centerX: cx, centerY: cy,
+                            startAngle: Math.atan2(my - cy, mx - cx),
+                        };
+                    } else {
+                        this.paintFragDrag = {
+                            handle: h, startMX: mx, startMY: my,
+                            startX: frag.x, startY: frag.y,
+                            startW: frag.w, startH: frag.h,
+                        };
+                    }
+                } else if (this.pointInFrag(mx, my)) {
+                    this.paintFragDrag = {
+                        handle: 'move', startMX: mx, startMY: my,
+                        startX: this.paintFragment.x, startY: this.paintFragment.y,
+                        startW: this.paintFragment.w, startH: this.paintFragment.h,
+                    };
+                } else {
+                    // 點選外部 → 先確認当前再開始新選框
+                    this.commitFragment();
+                    this.selStart   = { x: mx, y: my };
+                    this.selCurrent = { x: mx, y: my };
+                }
+            } else {
+                // 開始拖曳新選框
+                this.selStart   = { x: mx, y: my };
+                this.selCurrent = { x: mx, y: my };
+            }
+        } else if (this.tool === 'select') {
+            // ── 多圖層選取（multi-select group）優先處理 ────────────────
+            if (this.multiSel) {
+                const mh = this.hitMultiSelHandle(mx, my);
+                if (mh) {
+                    this.pushHistory('縮放群組圖層');
+                    const bbox = this.getMultiSelBBox()!;
+                    this.multiSelDrag = {
+                        handle: mh, startMX: mx, startMY: my, startBBox: { ...bbox },
+                        snapImages: this.multiSel.imageIdxs.map(i => ({ ...this.imageLayers[i] })),
+                        snapTexts:  this.multiSel.textIdxs.map(i => ({ x: this.textLayers[i].x, y: this.textLayers[i].y, fontSize: this.textLayers[i].fontSize })),
+                        snapMds:    this.multiSel.mdIdxs.map(i => ({ x: this.markdownLayers[i].x, y: this.markdownLayers[i].y, fontSize: this.markdownLayers[i].fontSize, width: this.markdownLayers[i].width })),
+                    };
+                    return;
+                }
+                if (this.pointInMultiSelBBox(mx, my)) {
+                    this.pushHistory('移動群組圖層');
+                    const bbox = this.getMultiSelBBox()!;
+                    this.multiSelDrag = {
+                        handle: 'move', startMX: mx, startMY: my, startBBox: { ...bbox },
+                        snapImages: this.multiSel.imageIdxs.map(i => ({ ...this.imageLayers[i] })),
+                        snapTexts:  this.multiSel.textIdxs.map(i => ({ x: this.textLayers[i].x, y: this.textLayers[i].y, fontSize: this.textLayers[i].fontSize })),
+                        snapMds:    this.multiSel.mdIdxs.map(i => ({ x: this.markdownLayers[i].x, y: this.markdownLayers[i].y, fontSize: this.markdownLayers[i].fontSize, width: this.markdownLayers[i].width })),
+                    };
+                    return;
+                }
+                // 點擊群組外 → 解除群組選取，繼續後續判斷
+                this.multiSel = null;
+                this.multiSelDrag = null;
+            }
+            // ── [[Wikilink]] 點擊 → 在 Obsidian 開啟筆記 ──────────────────
+            const wikilinkHit = this.getWikilinkAt(mx, my);
+            if (wikilinkHit) {
+                this.app.workspace.openLinkText(wikilinkHit, '');
+                return;
+            }
+            // 先檢查文字圖層（文字層在繪畫層下方）
+            let hitText = -1;
+            for (let i = this.textLayers.length - 1; i >= 0; i--) {
+                if (this.pointInText(mx, my, this.textLayers[i])) { hitText = i; break; }
+            }
+            // 如已選取文字圖層，先檢查控點是否被點擊
+            if (this.selectedTextIdx >= 0) {
+                const h = this.hitTextHandle(mx, my, this.textLayers[this.selectedTextIdx]);
+                if (h) {
+                    const tl = this.textLayers[this.selectedTextIdx];
+                    const b  = this.textBBox(tl);
+                    this.pushHistory('縮放文字圖層');  // 拖曳彈物層前先存快照
+                    this.textDragState = {
+                        handle: h, startMX: mx, startMY: my,
+                        startX: tl.x, startY: tl.y,
+                        startFontSize: tl.fontSize, startW: b.w, startH: b.h,
+                    };
+                    return;
+                }
+            }
+            if (hitText >= 0) {
+                this.selectedTextIdx = hitText;
+                this.selectedIdx     = -1;
+                this.selectedMdIdx   = -1;
+                this.dragState       = null;
+                this.mdDragState     = null;
+                const tl = this.textLayers[hitText];
+                this.textColorInput.value = tl.color;
+                const b  = this.textBBox(tl);
+                this.pushHistory('移動文字圖層');  // 移動文字圖層前先存快照
+                this.textDragState = {
+                    handle: 'move', startMX: mx, startMY: my,
+                    startX: tl.x, startY: tl.y,
+                    startFontSize: tl.fontSize, startW: b.w, startH: b.h,
+                };
+                this.render();
+                return;
+            }
+            // 檢查 Markdown 圖層（已選取的先檢查控點）
+            if (this.selectedMdIdx >= 0 && this.selectedMdIdx < this.markdownLayers.length) {
+                const h = this.hitMdHandle(mx, my, this.markdownLayers[this.selectedMdIdx]);
+                if (h) {
+                    const ml  = this.markdownLayers[this.selectedMdIdx];
+                    const b   = this.mdBBox(ml);
+                    const rot = ml.rotation || 0;
+                    if (h === 'rotate') {
+                        this.pushHistory('旋轉 Markdown 圖層');
+                        const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+                        this.mdDragState = {
+                            handle: 'rotate', startMX: mx, startMY: my,
+                            startX: ml.x, startY: ml.y,
+                            startFontSize: ml.fontSize, startWidth: ml.width, startH: b.h,
+                            startRotation: rot, centerX: cx, centerY: cy,
+                            startAngle: Math.atan2(my - cy, mx - cx),
+                        };
+                    } else {
+                        this.pushHistory('縮放 Markdown 圖層');
+                        this.mdDragState = {
+                            handle: h, startMX: mx, startMY: my,
+                            startX: ml.x, startY: ml.y,
+                            startFontSize: ml.fontSize, startWidth: ml.width, startH: b.h,
+                        };
+                    }
+                    return;
+                }
+            }
+            let hitMd = -1;
+            for (let i = this.markdownLayers.length - 1; i >= 0; i--) {
+                if (this.pointInMd(mx, my, this.markdownLayers[i])) { hitMd = i; break; }
+            }
+            if (hitMd >= 0) {
+                // [[Wikilink]] 點擊 → 在 Obsidian 開啟筆記
+                const mdWikilink = this.getMdWikilinkAt(mx, my);
+                if (mdWikilink) {
+                    this.app.workspace.openLinkText(mdWikilink, '');
+                    return;
+                }
+                // [text](url) 超連結點擊 → 在瀏覽器開啟
+                const mdUrl = this.getMdUrlAt(mx, my);
+                if (mdUrl) {
+                    (this.app as any).openUrl
+                        ? (this.app as any).openUrl(mdUrl)
+                        : window.open(mdUrl, '_blank');
+                    return;
+                }
+                this.selectedMdIdx   = hitMd;
+                this.selectedIdx     = -1;
+                this.selectedTextIdx = -1;
+                this.dragState       = null;
+                this.textDragState   = null;
+                const ml = this.markdownLayers[hitMd];
+                const b  = this.mdBBox(ml);
+                this.pushHistory('移動 Markdown 圖層');
+                this.mdDragState = {
+                    handle: 'move', startMX: mx, startMY: my,
+                    startX: ml.x, startY: ml.y,
+                    startFontSize: ml.fontSize, startWidth: ml.width, startH: b.h,
+                };
+                this.render();
+                return;
+            }
+            // 先檢查是否點到控點
+            if (this.selectedIdx >= 0) {
+                const h = this.hitHandle(mx, my, this.imageLayers[this.selectedIdx]);
+                if (h) {
+                    const lay = this.imageLayers[this.selectedIdx];
+                    const rot = lay.rotation || 0;
+                    if (h === 'rotate') {
+                        this.pushHistory('旋轉圖片圖層');
+                        const cx = lay.x + lay.w / 2, cy = lay.y + lay.h / 2;
+                        this.dragState = {
+                            handle: 'rotate', startMX: mx, startMY: my,
+                            startX: lay.x, startY: lay.y, startW: lay.w, startH: lay.h,
+                            startRotation: rot, centerX: cx, centerY: cy,
+                            startAngle: Math.atan2(my - cy, mx - cx),
+                        };
+                    } else {
+                        this.pushHistory('縮放圖片圖層');  // 縮放圖片層前先存快照
+                        this.dragState = { handle: h, startMX: mx, startMY: my,
+                            startX: lay.x, startY: lay.y, startW: lay.w, startH: lay.h };
+                    }
+                    return;
+                }
+            }
+            // 點到哪個圖片圖層？（由上到下）
+            let hit = -1;
+            for (let i = this.imageLayers.length - 1; i >= 0; i--) {
+                if (this.pointInLayer(mx, my, this.imageLayers[i])) { hit = i; break; }
+            }
+            if (hit >= 0) {
+                this.selectedIdx     = hit;
+                this.selectedTextIdx = -1;
+                this.selectedMdIdx   = -1;
+                const lay = this.imageLayers[hit];
+                this.pushHistory('移動圖片圖層');  // 移動圖片層前先存快照
+                this.dragState = { handle: 'move', startMX: mx, startMY: my,
+                    startX: lay.x, startY: lay.y, startW: lay.w, startH: lay.h };
+            } else {
+                // 空白處 → 開始圈選拖曳框
+                this.selectedIdx     = -1;
+                this.selectedTextIdx = -1;
+                this.selectedMdIdx   = -1;
+                this.imgSelStart   = { x: mx, y: my };
+                this.imgSelCurrent = { x: mx, y: my };
+            }
+            this.render();
+        } else {
+            // 畫筆 / 橡皮擦
+            // stroke-layer 模式下橡皮擦：壓著滑過即刪除所有觸及的圖層
+            if (this.settings.brushMode === 'stroke-layer' && this.eraser) {
+                this.pushHistory('橡皮擦（圖層）');
+                this.drawing = true;  // 讓 pointermove 持續觸發擦除
+                this._eraseLayerAt(mx, my);
+                return;
+            }
+            this.pushHistory(this.eraser ? '橡皮擦' : '筆觸');  // 每次筆觸開始前保存快照
+            this.drawing = true;
+            this.prevX = mx; this.prevY = my;
+            this.initViewportCache();  // 初始化 viewport paint cache
+            this.paintDot(mx, my);
+        }
+    }
+
+    private _onPointerMove(e: PointerEvent): void {
+        // 更新此 pointer 的位置
+        if (this.activePointers.has(e.pointerId)) {
+            this.activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        }
+
+        // 自訂游標 dot（draw 模式顯示筆刷顏色圓圈）
+        if (e.pointerType === 'mouse') this.updateCustomCursor(e);
+
+        // 雙指（含）以上：pinch-to-zoom + 平移
+        if (this.activePointers.size >= 2) {
+            const ptrs = [...this.activePointers.values()];
+            const cx = (ptrs[0].x + ptrs[1].x) / 2;
+            const cy = (ptrs[0].y + ptrs[1].y) / 2;
+            // 縮放（以當前雙指中心為 pivot，每幀重算，避免跳動）
+            if (this.pinchStartDist && this.pinchStartZoom !== null) {
+                const ddx  = ptrs[1].x - ptrs[0].x;
+                const ddy  = ptrs[1].y - ptrs[0].y;
+                const dist = Math.hypot(ddx, ddy);
+                const MIN_ZOOM = 0.1, MAX_ZOOM = 8.0;
+                const newZoom  = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM,
+                    this.pinchStartZoom * (dist / this.pinchStartDist)));
+                const wRect  = this.canvasWrapper.getBoundingClientRect();
+                const pivotX = cx - wRect.left;
+                const pivotY = cy - wRect.top;
+                const ratio  = newZoom / this.zoom;
+                // 在 applyZoom 前先快照 scroll，避免瀏覽器 resize 後自動修改 scrollLeft
+                const prevSL = this.canvasWrapper.scrollLeft;
+                const prevST = this.canvasWrapper.scrollTop;
+                this.zoom = newZoom;
+                this.applyZoom();
+                this.canvasWrapper.scrollLeft = (prevSL + pivotX) * ratio - pivotX;
+                this.canvasWrapper.scrollTop  = (prevST + pivotY) * ratio - pivotY;
+                this.refreshStatus();
+            }
+            // 雙指平移：增量方式，疊加在縮放後的 scroll 上，避免互相覆蓋
+            this.canvasWrapper.scrollLeft -= (cx - this.panStartX);
+            this.canvasWrapper.scrollTop  -= (cy - this.panStartY);
+            // 更新基準點供下一幀使用
+            this.panStartX = cx;
+            this.panStartY = cy;
+            return;
+        }
+
+        // 中鍵 / 單指平移
+        if (this.isPanning) {
+            this.canvasWrapper.scrollLeft = this.panScrollLeft - (e.clientX - this.panStartX);
+            this.canvasWrapper.scrollTop  = this.panScrollTop  - (e.clientY - this.panStartY);
+            return;
+        }
+        // 雙指手勢結束後殘餘單指 → 忽略，避免跳位或誤觸
+        if (this.gestureActive) return;
+        if (!e.isPrimary) return;
+
+        // 手指移動超出 slop → 取消長按
+        if (this.longPressTimer) {
+            const dx = e.clientX - this.longPressStartX;
+            const dy = e.clientY - this.longPressStartY;
+            if (Math.hypot(dx, dy) > EasyNoteView.LONG_PRESS_SLOP) {
+                clearTimeout(this.longPressTimer);
+                this.longPressTimer = null;
+            }
+        }
+
+        const { x: mx, y: my } = this.toCanvasCoords(e);
+
+        if (this.tool === 'select') {
+            // 更新游標
+            this.updateCursor(mx, my);
+
+            // 多圖層群組拖曳 / 縮放
+            if (this.multiSelDrag && this.multiSel) {
+                const ds  = this.multiSelDrag;
+                const dx  = mx - ds.startMX;
+                const dy  = my - ds.startMY;
+                if (ds.handle === 'move') {
+                    for (let k = 0; k < this.multiSel.imageIdxs.length; k++) {
+                        const i = this.multiSel.imageIdxs[k];
+                        this.imageLayers[i].x = ds.snapImages[k].x + dx;
+                        this.imageLayers[i].y = ds.snapImages[k].y + dy;
+                    }
+                    for (let k = 0; k < this.multiSel.textIdxs.length; k++) {
+                        const i = this.multiSel.textIdxs[k];
+                        this.textLayers[i].x = ds.snapTexts[k].x + dx;
+                        this.textLayers[i].y = ds.snapTexts[k].y + dy;
+                    }
+                    for (let k = 0; k < this.multiSel.mdIdxs.length; k++) {
+                        const i = this.multiSel.mdIdxs[k];
+                        this.markdownLayers[i].x = ds.snapMds[k].x + dx;
+                        this.markdownLayers[i].y = ds.snapMds[k].y + dy;
+                        this.markdownLayers[i]._cachedH = undefined;
+                    }
+                } else {
+                    // 縮放：以對角為錨點，等比例縮放所有圖層
+                    const b = ds.startBBox;
+                    let anchorX: number, anchorY: number, newW: number, newH: number;
+                    if (ds.handle === 'nw') {
+                        anchorX = b.x + b.w; anchorY = b.y + b.h;
+                        newW = Math.max(10, anchorX - mx); newH = Math.max(10, anchorY - my);
+                    } else if (ds.handle === 'ne') {
+                        anchorX = b.x; anchorY = b.y + b.h;
+                        newW = Math.max(10, mx - anchorX); newH = Math.max(10, anchorY - my);
+                    } else if (ds.handle === 'sw') {
+                        anchorX = b.x + b.w; anchorY = b.y;
+                        newW = Math.max(10, anchorX - mx); newH = Math.max(10, my - anchorY);
+                    } else { // se
+                        anchorX = b.x; anchorY = b.y;
+                        newW = Math.max(10, mx - anchorX); newH = Math.max(10, my - anchorY);
+                    }
+                    if (e.shiftKey) {
+                        const sc = Math.min(newW / b.w, newH / b.h);
+                        newW = sc * b.w; newH = sc * b.h;
+                    }
+                    const sx = newW / b.w, sy = newH / b.h;
+                    for (let k = 0; k < this.multiSel.imageIdxs.length; k++) {
+                        const i  = this.multiSel.imageIdxs[k];
+                        const s  = ds.snapImages[k];
+                        this.imageLayers[i].x = anchorX + (s.x - anchorX) * sx;
+                        this.imageLayers[i].y = anchorY + (s.y - anchorY) * sy;
+                        this.imageLayers[i].w = Math.max(1, s.w * sx);
+                        this.imageLayers[i].h = Math.max(1, s.h * sy);
+                    }
+                    for (let k = 0; k < this.multiSel.textIdxs.length; k++) {
+                        const i = this.multiSel.textIdxs[k];
+                        const s = ds.snapTexts[k];
+                        this.textLayers[i].x = anchorX + (s.x - anchorX) * sx;
+                        this.textLayers[i].y = anchorY + (s.y - anchorY) * sy;
+                        this.textLayers[i].fontSize = Math.max(8, s.fontSize * (sx + sy) / 2);
+                    }
+                    for (let k = 0; k < this.multiSel.mdIdxs.length; k++) {
+                        const i = this.multiSel.mdIdxs[k];
+                        const s = ds.snapMds[k];
+                        this.markdownLayers[i].x = anchorX + (s.x - anchorX) * sx;
+                        this.markdownLayers[i].y = anchorY + (s.y - anchorY) * sy;
+                        this.markdownLayers[i].fontSize = Math.max(8, s.fontSize * sx);
+                        this.markdownLayers[i].width    = Math.max(40, s.width * sx);
+                        this.markdownLayers[i]._cachedH = undefined;
+                    }
+                }
+                this.render();
+                return;
+            }
+
+            // 圈選橡皮筋框更新
+            if (this.imgSelStart) {
+                this.imgSelCurrent = { x: mx, y: my };
+                this.render();
+                return;
+            }
+
+            // Markdown 拖曳 / 縮放
+            if (this.mdDragState && this.selectedMdIdx >= 0) {
+                const md  = this.mdDragState;
+                const ml  = this.markdownLayers[this.selectedMdIdx];
+                const dx  = mx - md.startMX;
+                const MIN_FONT  = 8;
+                const MIN_WIDTH = 40;
+                if (md.handle === 'rotate') {
+                    const angle = Math.atan2(my - md.centerY!, mx - md.centerX!);
+                    let rot = md.startRotation! + (angle - md.startAngle!);
+                    if (e.shiftKey) { const snap = Math.PI / 12; rot = Math.round(rot / snap) * snap; }
+                    ml.rotation = rot;
+                    ml._cachedH = undefined;
+                    this.render(); return;
+                } else if (md.handle === 'move') {
+                    ml.x = md.startX + dx;
+                    ml.y = md.startY + (my - md.startMY);
+                } else if (md.handle === 'se') {
+                    const nw    = Math.max(MIN_WIDTH, md.startWidth + dx);
+                    const scale = nw / md.startWidth;
+                    ml.fontSize = Math.max(MIN_FONT, md.startFontSize * scale);
+                    ml.width    = nw;
+                } else if (md.handle === 'ne') {
+                    const nw    = Math.max(MIN_WIDTH, md.startWidth + dx);
+                    const scale = nw / md.startWidth;
+                    ml.fontSize = Math.max(MIN_FONT, md.startFontSize * scale);
+                    ml.width    = nw;
+                    ml.y        = md.startY + (md.startH - md.startH * scale);
+                } else if (md.handle === 'sw') {
+                    const nw    = Math.max(MIN_WIDTH, md.startWidth - dx);
+                    const scale = nw / md.startWidth;
+                    ml.fontSize = Math.max(MIN_FONT, md.startFontSize * scale);
+                    ml.width    = nw;
+                    ml.x        = md.startX + (md.startWidth - nw);
+                } else { // nw
+                    const nw    = Math.max(MIN_WIDTH, md.startWidth - dx);
+                    const scale = nw / md.startWidth;
+                    ml.fontSize = Math.max(MIN_FONT, md.startFontSize * scale);
+                    ml.width    = nw;
+                    ml.x        = md.startX + (md.startWidth - nw);
+                    ml.y        = md.startY + (md.startH - md.startH * scale);
+                }
+                ml._cachedH = undefined;
+                this.render();
+                return;
+            }
+
+            // 文字拖曳 / 縮放
+            if (this.textDragState && this.selectedTextIdx >= 0) {
+                const td  = this.textDragState;
+                const tl  = this.textLayers[this.selectedTextIdx];
+                const dx  = mx - td.startMX;
+                const dy  = my - td.startMY;
+                const MIN_FONT = 8;
+                const minW     = td.startW * (MIN_FONT / td.startFontSize);
+
+                if (td.handle === 'rotate') {
+                    const angle = Math.atan2(my - td.centerY!, mx - td.centerX!);
+                    let rot = td.startRotation! + (angle - td.startAngle!);
+                    if (e.shiftKey || this.proportionalScale) { const snap = Math.PI / 12; rot = Math.round(rot / snap) * snap; }
+                    tl.rotation = rot;
+                    this.render(); return;
+                } else if (td.handle === 'move') {
+                    tl.x = td.startX + dx;
+                    tl.y = td.startY + dy;
+                } else if (td.handle === 'nw') {
+                    const nw    = Math.max(minW, td.startW - dx);
+                    const scale = nw / td.startW;
+                    tl.fontSize = Math.max(MIN_FONT, td.startFontSize * scale);
+                    tl.x = td.startX + (td.startW - nw);
+                    tl.y = td.startY + (td.startH - td.startH * scale);
+                } else if (td.handle === 'ne') {
+                    const nw    = Math.max(minW, td.startW + dx);
+                    const scale = nw / td.startW;
+                    tl.fontSize = Math.max(MIN_FONT, td.startFontSize * scale);
+                    tl.y = td.startY + (td.startH - td.startH * scale);
+                } else if (td.handle === 'sw') {
+                    const nw    = Math.max(minW, td.startW - dx);
+                    const scale = nw / td.startW;
+                    tl.fontSize = Math.max(MIN_FONT, td.startFontSize * scale);
+                    tl.x = td.startX + (td.startW - nw);
+                } else { // se
+                    const nw    = Math.max(minW, td.startW + dx);
+                    const scale = nw / td.startW;
+                    tl.fontSize = Math.max(MIN_FONT, td.startFontSize * scale);
+                }
+                this.render();
+                return;
+            }
+
+            if (this.dragState) {
+                const ds    = this.dragState;
+                const dx    = mx - ds.startMX;
+                const dy    = my - ds.startMY;
+                const lay   = this.imageLayers[this.selectedIdx];
+                const ratio = ds.startW / ds.startH;  // 原始長寬比
+
+                if (ds.handle === 'rotate') {
+                    const angle = Math.atan2(my - ds.centerY!, mx - ds.centerX!);
+                    let rot = ds.startRotation! + (angle - ds.startAngle!);
+                    if (e.shiftKey || this.proportionalScale) { const snap = Math.PI / 12; rot = Math.round(rot / snap) * snap; }
+                    lay.rotation = rot;
+                    this.render(); return;
+                } else if (ds.handle === 'move') {
+                    lay.x = ds.startX + dx;
+                    lay.y = ds.startY + dy;
+                } else {
+                    // 縮放：各角拖曳改變 x/y/w/h
+                    const MIN = 20;
+                    if (ds.handle === 'nw') {
+                        let nw = Math.max(MIN, ds.startW - dx);
+                        let nh = Math.max(MIN, ds.startH - dy);
+                        if (e.shiftKey || this.proportionalScale) {
+                            const scale = Math.max((ds.startW - dx) / ds.startW, (ds.startH - dy) / ds.startH);
+                            nw = Math.max(MIN, ds.startW * scale);
+                            nh = Math.max(MIN, nw / ratio);
+                        }
+                        lay.x = ds.startX + (ds.startW - nw);
+                        lay.y = ds.startY + (ds.startH - nh);
+                        lay.w = nw; lay.h = nh;
+                    } else if (ds.handle === 'ne') {
+                        let nw = Math.max(MIN, ds.startW + dx);
+                        let nh = Math.max(MIN, ds.startH - dy);
+                        if (e.shiftKey || this.proportionalScale) {
+                            const scale = Math.max((ds.startW + dx) / ds.startW, (ds.startH - dy) / ds.startH);
+                            nw = Math.max(MIN, ds.startW * scale);
+                            nh = Math.max(MIN, nw / ratio);
+                        }
+                        lay.w = nw;
+                        lay.y = ds.startY + (ds.startH - nh);
+                        lay.h = nh;
+                    } else if (ds.handle === 'sw') {
+                        let nw = Math.max(MIN, ds.startW - dx);
+                        let nh = Math.max(MIN, ds.startH + dy);
+                        if (e.shiftKey || this.proportionalScale) {
+                            const scale = Math.max((ds.startW - dx) / ds.startW, (ds.startH + dy) / ds.startH);
+                            nw = Math.max(MIN, ds.startW * scale);
+                            nh = Math.max(MIN, nw / ratio);
+                        }
+                        lay.x = ds.startX + (ds.startW - nw);
+                        lay.w = nw; lay.h = nh;
+                    } else { // se
+                        let nw = Math.max(MIN, ds.startW + dx);
+                        let nh = Math.max(MIN, ds.startH + dy);
+                        if (e.shiftKey || this.proportionalScale) {
+                            const scale = Math.max((ds.startW + dx) / ds.startW, (ds.startH + dy) / ds.startH);
+                            nw = Math.max(MIN, ds.startW * scale);
+                            nh = Math.max(MIN, nw / ratio);
+                        }
+                        lay.w = nw; lay.h = nh;
+                    }
+                }
+                this.render();
+            }
+        } else if (this.drawing) {
+            // stroke-layer 橡皮擦：滑過時持續擦除
+            if (this.settings.brushMode === 'stroke-layer' && this.eraser) {
+                this._eraseLayerAt(mx, my);
+                return;
+            }
+            // 使用 getCoalescedEvents 取回所有被合併的中間點，
+            // 避免大畫布在 Android 上因事件節流導致曲線退化成直線
+            const coalesced = (e as PointerEvent).getCoalescedEvents?.() ?? [e];
+            for (const ce of coalesced) {
+                const { x: cpx, y: cpy } = this.toCanvasCoords(ce as PointerEvent);
+                this.paintStroke(this.prevX, this.prevY, cpx, cpy);
+                this.prevX = cpx; this.prevY = cpy;
+            }
+        } else if (this.tool === 'paintselect') {
+            if (this.paintFragDrag && this.paintFragment) {
+                const ds    = this.paintFragDrag;
+                const dx    = mx - ds.startMX;
+                const dy    = my - ds.startMY;
+                const frag  = this.paintFragment;
+                const ratio = ds.startW / ds.startH;
+                const MIN   = 10;
+                if (ds.handle === 'rotate') {
+                    const angle = Math.atan2(my - ds.centerY!, mx - ds.centerX!);
+                    let rot = ds.startRotation! + (angle - ds.startAngle!);
+                    if (e.shiftKey || this.proportionalScale) { const snap = Math.PI / 12; rot = Math.round(rot / snap) * snap; }
+                    frag.rotation = rot;
+                } else if (ds.handle === 'move') {
+                    frag.x = ds.startX + dx;
+                    frag.y = ds.startY + dy;
+                } else if (ds.handle === 'nw') {
+                    let nw = Math.max(MIN, ds.startW - dx);
+                    let nh = Math.max(MIN, ds.startH - dy);
+                    if (e.shiftKey || this.proportionalScale) { const sc = Math.max((ds.startW-dx)/ds.startW,(ds.startH-dy)/ds.startH); nw=Math.max(MIN,ds.startW*sc); nh=nw/ratio; }
+                    frag.x = ds.startX + (ds.startW - nw); frag.y = ds.startY + (ds.startH - nh); frag.w = nw; frag.h = nh;
+                } else if (ds.handle === 'ne') {
+                    let nw = Math.max(MIN, ds.startW + dx);
+                    let nh = Math.max(MIN, ds.startH - dy);
+                    if (e.shiftKey || this.proportionalScale) { const sc = Math.max((ds.startW+dx)/ds.startW,(ds.startH-dy)/ds.startH); nw=Math.max(MIN,ds.startW*sc); nh=nw/ratio; }
+                    frag.w = nw; frag.y = ds.startY + (ds.startH - nh); frag.h = nh;
+                } else if (ds.handle === 'sw') {
+                    let nw = Math.max(MIN, ds.startW - dx);
+                    let nh = Math.max(MIN, ds.startH + dy);
+                    if (e.shiftKey || this.proportionalScale) { const sc = Math.max((ds.startW-dx)/ds.startW,(ds.startH+dy)/ds.startH); nw=Math.max(MIN,ds.startW*sc); nh=nw/ratio; }
+                    frag.x = ds.startX + (ds.startW - nw); frag.w = nw; frag.h = nh;
+                } else { // se
+                    let nw = Math.max(MIN, ds.startW + dx);
+                    let nh = Math.max(MIN, ds.startH + dy);
+                    if (e.shiftKey || this.proportionalScale) { const sc = Math.max((ds.startW+dx)/ds.startW,(ds.startH+dy)/ds.startH); nw=Math.max(MIN,ds.startW*sc); nh=nw/ratio; }
+                    frag.w = nw; frag.h = nh;
+                }
+                this.render();
+            } else if (this.selStart) {
+                this.selCurrent = { x: mx, y: my };
+                this.render();
+            } else {
+                // 更新游標
+                if (this.hitFragHandle(mx, my)) {
+                    this.canvas.style.cursor = 'nwse-resize';
+                } else if (this.pointInFrag(mx, my)) {
+                    this.canvas.style.cursor = 'move';
+                } else {
+                    this.canvas.style.cursor = EasyNoteView.CURSOR_CROSSHAIR;
+                }
+            }
+        }
+
+    }
+
+    private _onPointerUp(e: PointerEvent): void {
+        this.activePointers.delete(e.pointerId);
+        // 手指抬起 → 取消長按計時器
+        if (this.longPressTimer) {
+            clearTimeout(this.longPressTimer);
+            this.longPressTimer = null;
+        }
+        // 雙指結束 → 重設 pinch 狀態
+        if (this.activePointers.size < 2) {
+            this.pinchStartDist = null;
+            this.pinchStartZoom = null;
+            this.pinchCenterX   = null;
+            this.pinchCenterY   = null;
+            // 中止雙指平移，殘餘單指不應觸發單指平移（panScrollLeft 已過期）
+            this.isPanning = false;
+        }
+        // 三指→雙指：以剩餘兩指重新初始化 pinch 基準，避免跳動
+        if (this.activePointers.size === 2) {
+            const ptrs2 = [...this.activePointers.values()];
+            const dx2   = ptrs2[1].x - ptrs2[0].x;
+            const dy2   = ptrs2[1].y - ptrs2[0].y;
+            this.pinchStartDist = Math.hypot(dx2, dy2);
+            this.pinchStartZoom = this.zoom;
+            this.panStartX = (ptrs2[0].x + ptrs2[1].x) / 2;
+            this.panStartY = (ptrs2[0].y + ptrs2[1].y) / 2;
+        }
+        if (this.activePointers.size === 1) {
+            // 有殘餘手指 → 標記手勢仍活躍，pointermove 將忽略它
+            this.gestureActive = true;
+        }
+        if (this.activePointers.size === 0) {
+            this.gestureActive = false;
+        }
+        if (e.button === 1) {
+            this.isPanning = false;
+            this.canvas.style.cursor = this.tool === 'draw' ? 'crosshair' : (this.tool === 'text' ? EasyNoteView.CURSOR_TEXT : (this.tool === 'paintselect' ? EasyNoteView.CURSOR_CROSSHAIR : (this.tool === 'pan' ? EasyNoteView.CURSOR_GRAB : 'default')));
+            return;
+        }
+        if (this.tool === 'paintselect') {
+            if (this.selStart) {
+                const rect = this.getSelRect();
+                if (rect) this.extractFragment(rect);
+                this.selStart   = null;
+                this.selCurrent = null;
+                if (!rect) this.render();
+            }
+            this.paintFragDrag = null;
+            return;
+        }
+        // 圖層圈選（rubber-band）結束 → 計算 multiSel
+        if (this.tool === 'select' && this.imgSelStart && this.imgSelCurrent) {
+            const x1 = Math.min(this.imgSelStart.x, this.imgSelCurrent.x);
+            const y1 = Math.min(this.imgSelStart.y, this.imgSelCurrent.y);
+            const x2 = Math.max(this.imgSelStart.x, this.imgSelCurrent.x);
+            const y2 = Math.max(this.imgSelStart.y, this.imgSelCurrent.y);
+            this.imgSelStart   = null;
+            this.imgSelCurrent = null;
+            if (x2 - x1 > 5 && y2 - y1 > 5) {
+                const imageIdxs = this.imageLayers.reduce((acc, l, i) => {
+                    if (l.x + l.w > x1 && l.x < x2 && l.y + l.h > y1 && l.y < y2) acc.push(i);
+                    return acc;
+                }, [] as number[]);
+                const textIdxs = this.textLayers.reduce((acc, tl, i) => {
+                    const b = this.textBBox(tl);
+                    if (b.x + b.w > x1 && b.x < x2 && b.y + b.h > y1 && b.y < y2) acc.push(i);
+                    return acc;
+                }, [] as number[]);
+                const mdIdxs = this.markdownLayers.reduce((acc, ml, i) => {
+                    const b = this.mdBBox(ml);
+                    if (b.x + b.w > x1 && b.x < x2 && b.y + b.h > y1 && b.y < y2) acc.push(i);
+                    return acc;
+                }, [] as number[]);
+                const total = imageIdxs.length + textIdxs.length + mdIdxs.length;
+                if (total > 1) {
+                    this.multiSel = { imageIdxs, textIdxs, mdIdxs };
+                    this.selectedIdx = -1; this.selectedTextIdx = -1; this.selectedMdIdx = -1;
+                } else if (imageIdxs.length === 1) {
+                    this.selectedIdx = imageIdxs[0];
+                } else if (textIdxs.length === 1) {
+                    this.selectedTextIdx = textIdxs[0];
+                } else if (mdIdxs.length === 1) {
+                    this.selectedMdIdx = mdIdxs[0];
+                }
+            }
+            this.multiSelDrag = null;
+            this.render();
+            return;
+        }
+        this.multiSelDrag  = null;
+        this.drawing       = false;
+        this._vpCache      = null;  // 清除 viewport cache，觸發下一次完整渲染
+        this.dragState     = null;
+        this.textDragState = null;
+        this.mdDragState   = null;
+        // stroke-layer 模式：筆觸結束，提交為圖片圖層
+        if (this.settings.brushMode === 'stroke-layer' && !this.eraser) {
+            this.commitStrokeAsLayer();
+        }
+        this.scheduleRender();  // 筆觸結束後確保以完整畫布合成一次, (e) => {
+        this.activePointers.delete(e.pointerId);
+        if (this.longPressTimer) { clearTimeout(this.longPressTimer); this.longPressTimer = null; }
+        if (this.activePointers.size === 0) {
+            this.isPanning     = false;
+            this.pinchStartDist = null;
+            this.pinchStartZoom = null;
+        }
+    }
+
+    private _onPointerLeave(e: PointerEvent): void {
+        if (e.pointerType !== 'mouse') return;  // 觸控滑出由 pointerup/cancel 處理
+        // 隱藏自訂游標 dot，還原系統游標
+        if (this._cursorDot) this._cursorDot.style.display = 'none';
+        if (this.tool === 'draw') this.canvas.style.cursor = '';
+        this.isPanning     = false;
+        if (this.drawing && this.settings.brushMode === 'stroke-layer' && !this.eraser) {
+            this.commitStrokeAsLayer();
+        }
+        this.drawing       = false;
+        this._vpCache      = null;
+        this.dragState     = null;
+        this.textDragState = null;
+        this.mdDragState   = null;
+        this.paintFragDrag = null;
+        if (this.selStart) { this.selStart = null; this.selCurrent = null; this.render(); }
+        this.multiSelDrag = null;
+        if (this.imgSelStart) { this.imgSelStart = null; this.imgSelCurrent = null; this.render(); }
+    }
+
+    private _onDblClick(e: MouseEvent): void {
+        if (this.tool !== 'select') return;
+        const { x: mx, y: my } = this.toCanvasCoords(e);
+        for (let i = this.markdownLayers.length - 1; i >= 0; i--) {
+            if (this.pointInMd(mx, my, this.markdownLayers[i])) {
+                this.openMarkdownEditor(i);
+                return;
+            }
+        }
+        for (let i = this.textLayers.length - 1; i >= 0; i--) {
+            if (this.pointInText(mx, my, this.textLayers[i])) {
+                this.openTextEditor(this.textLayers[i].x, this.textLayers[i].y, i);
+                return;
+            }
+        }
     }
 
     /** 套用目前縮放比例到 canvas CSS 尺寸 */

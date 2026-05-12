@@ -74,7 +74,9 @@ export class DesktopInputHandler {
                 this.api.setTool(this.api.getTool() === 'text' ? 'draw' : 'text');
                 break;
             case 'm': case 'M':
-                this.api.setTool(this.api.getTool() === 'paintselect' ? 'draw' : 'paintselect');
+                if (this.api.isPaintSelectAvailable()) {
+                    this.api.setTool(this.api.getTool() === 'paintselect' ? 'draw' : 'paintselect');
+                }
                 break;
             case 'Enter':
                 if (this.api.getTool() === 'paintselect') {

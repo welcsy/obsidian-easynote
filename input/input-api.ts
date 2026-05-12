@@ -70,4 +70,17 @@ export interface FeatureAPI {
     // ── Clipboard (system) ──────────────────────────────────────────────────
     /** 貼上來自系統剪貼簿的圖片檔案 */
     pasteImageFromFile(file: File): void;
+
+    // ── Mode guards ──────────────────────────────────────────────────────────
+    /** stroke-layer 模式下 paintselect 工具無意義，回傳 false 時應忽略對應快捷鍵 */
+    isPaintSelectAvailable(): boolean;
+
+    // ── Canvas pointer events (delegated from CanvasInputHandler) ────────────
+    handlePointerDown(e: PointerEvent): void;
+    handlePointerMove(e: PointerEvent): void;
+    handlePointerUp(e: PointerEvent): void;
+    /** pointercancel — 視同 pointerup，清理拖曳 / 繪圖狀態 */
+    handlePointerCancel(e: PointerEvent): void;
+    handlePointerLeave(e: PointerEvent): void;
+    handleDblClick(e: MouseEvent): void;
 }
