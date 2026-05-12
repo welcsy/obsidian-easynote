@@ -735,7 +735,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         });
         saveBtn.addEventListener('click', () => {
             const ts = this.localTimestamp();
-            const defaultName = this.lastSaveName || `EasyNote-${ts}`;
+            const defaultName = this.lastProjectName || this.lastSaveName || `EasyNote-${ts}`;
             new SaveModal(this.app, defaultName, (name, fmt) => this.saveDrawing(name, fmt)).open();
         });
 
