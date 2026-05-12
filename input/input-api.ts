@@ -83,4 +83,13 @@ export interface FeatureAPI {
     handlePointerCancel(e: PointerEvent): void;
     handlePointerLeave(e: PointerEvent): void;
     handleDblClick(e: MouseEvent): void;
+
+    // ── Canvas drag-and-drop (delegated from CanvasInputHandler) ─────────────
+    handleDragOver(e: DragEvent): void;
+    handleDragLeave(e: DragEvent): void;
+    handleDrop(e: DragEvent): void;
+
+    // ── Mobile long-press (delegated from MobileLongPressHandler) ────────────
+    /** 觸控長按觸發：座標為 clientX/Y，由 MobileLongPressHandler 偵測後呼叫 */
+    triggerLongPress(clientX: number, clientY: number): void;
 }

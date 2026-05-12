@@ -41,8 +41,9 @@ import { canvasFont, codeFont } from './fonts';
 import { SaveModal, CanvasSizeModal, ProjectNameModal, VaultProjectPickerModal, VaultImagePickerModal, VaultNotePickerModal } from './ui/modals';
 
 // ─── 輸入處理 ─────────────────────────────────────────────────────────────────
-import { DesktopInputHandler } from './input/input-desktop';
-import { CanvasInputHandler }  from './input/input-canvas';
+import { DesktopInputHandler }    from './input/input-desktop';
+import { CanvasInputHandler }     from './input/input-canvas';
+import { MobileLongPressHandler } from './input/input-mobile';
 import { type FeatureAPI, type Tool } from './input/input-api';
 
 // ─── 繪圖面板（ItemView）──────────────────────────────────────────────────────
@@ -171,10 +172,6 @@ class EasyNoteView extends ItemView implements FeatureAPI {
     // 自訂游標 dot（固定定位 overlay）
     private _cursorDot: HTMLDivElement | null = null;
 
-    // 長按偵測（Android 觸控選單）
-    private longPressTimer:    ReturnType<typeof setTimeout> | null = null;
-    private longPressStartX:   number = 0;
-    private longPressStartY:   number = 0;
     private proportionalScale: boolean = false;   // 等比例縮放鎖定（觸控用，等同 Shift）
     private static readonly LONG_PRESS_MS    = 500;   // 長按觸發時間（ms）
     private static readonly LONG_PRESS_SLOP  = 10;    // 允許移動距離（px）
@@ -223,6 +220,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
     // 事件繫結
     private _desktopInput!: DesktopInputHandler;
     private _canvasInput!:  CanvasInputHandler;
+    private _mobileInput!:  MobileLongPressHandler;
     private _onResize!:  ()                  => void;
     // Vault 檔案變更監聽（雙向同步）
     private _vaultModifyRef:      import('obsidian').EventRef | null = null;
@@ -279,8 +277,10 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         this.buildCanvas(root);
 
         this._desktopInput = new DesktopInputHandler(this);
+        this._mobileInput  = new MobileLongPressHandler(this);
         this._onResize  = () => this.resizeCanvas(true);
         this._desktopInput.bind(document, this.canvas);
+        this._mobileInput.bind(this.canvas);
         window.addEventListener('resize',    this._onResize);
 
         // Vault 檔案變更 → 更新連結圖層（Vault → EasyNote 雙向同步）
@@ -352,6 +352,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         }
         this._desktopInput.unbind(document, this.canvas);
         this._canvasInput.unbind(this.canvas);
+        this._mobileInput.unbind(this.canvas);
         window.removeEventListener('resize',    this._onResize);
         if (this._cursorDot) { this._cursorDot.remove(); this._cursorDot = null; }
     }
@@ -817,25 +818,6 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         // -- Canvas pointer events (Device Layer via CanvasInputHandler) --------
         this._canvasInput = new CanvasInputHandler(this);
         this._canvasInput.bind(this.canvas);
-
-        // 拖曳圖片進入
-        this.canvas.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            this.canvas.addClass('easynote-drag-over');
-        });
-        this.canvas.addEventListener('dragleave', () => this.canvas.removeClass('easynote-drag-over'));
-        this.canvas.addEventListener('drop', (e) => {
-            e.preventDefault();
-            this.canvas.removeClass('easynote-drag-over');
-            const file = e.dataTransfer?.files?.[0];
-            if (file && file.type.startsWith('image/')) { this.loadImageFromBlob(file); return; }
-            const text = e.dataTransfer?.getData('text/plain').trim();
-            if (text) {
-                const vf = this.app.vault.getFileByPath(normalizePath(text));
-                if (vf) this.loadImageFromVault(vf);
-                else new Notice(`EasyNote：找不到 Vault 檔案「${text}」`);
-            }
-        });
     }
 
     // ── Canvas 大小調整 ───────────────────────────────────────────────────────
@@ -890,6 +872,33 @@ class EasyNoteView extends ItemView implements FeatureAPI {
     handleDblClick(e: MouseEvent): void        { this._onDblClick(e);     }
     isPaintSelectAvailable(): boolean          { return this.settings.brushMode !== 'stroke-layer'; }
 
+    // -- Canvas drag-and-drop (Feature Layer implementation) -------------------
+    handleDragOver(e: DragEvent): void {
+        e.preventDefault();
+        this.canvas.addClass('easynote-drag-over');
+    }
+    handleDragLeave(_e: DragEvent): void {
+        this.canvas.removeClass('easynote-drag-over');
+    }
+    handleDrop(e: DragEvent): void {
+        e.preventDefault();
+        this.canvas.removeClass('easynote-drag-over');
+        const file = e.dataTransfer?.files?.[0];
+        if (file && file.type.startsWith('image/')) { this.loadImageFromBlob(file); return; }
+        const text = e.dataTransfer?.getData('text/plain').trim();
+        if (text) {
+            const vf = this.app.vault.getFileByPath(normalizePath(text));
+            if (vf) this.loadImageFromVault(vf);
+            else new Notice(`EasyNote：找不到 Vault 檔案「${text}」`);
+        }
+    }
+
+    // -- Mobile long-press (Feature Layer implementation) ----------------------
+    triggerLongPress(clientX: number, clientY: number): void {
+        const { x: mx, y: my } = this.toCanvasCoords({ clientX, clientY } as PointerEvent);
+        this.handleLongPress(mx, my, clientX, clientY);
+    }
+
     private _onPointerDown(e: PointerEvent): void {
         this.activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
@@ -940,19 +949,6 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         }
         if (e.button !== 0) return;
         if (!e.isPrimary) return;
-
-        // 觸控長按偵測（僅 touch / pen）
-        if (e.pointerType !== 'mouse') {
-            if (this.longPressTimer) clearTimeout(this.longPressTimer);
-            this.longPressStartX = e.clientX;
-            this.longPressStartY = e.clientY;
-            this.longPressTimer  = setTimeout(() => {
-                this.longPressTimer = null;
-                const { x: lmx, y: lmy } = this.toCanvasCoords(
-                    { clientX: this.longPressStartX, clientY: this.longPressStartY } as PointerEvent);
-                this.handleLongPress(lmx, lmy, this.longPressStartX, this.longPressStartY);
-            }, EasyNoteView.LONG_PRESS_MS);
-        }
 
         this.canvas.setPointerCapture(e.pointerId);
         const { x: mx, y: my } = this.toCanvasCoords(e);
@@ -1271,16 +1267,6 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         if (this.gestureActive) return;
         if (!e.isPrimary) return;
 
-        // 手指移動超出 slop → 取消長按
-        if (this.longPressTimer) {
-            const dx = e.clientX - this.longPressStartX;
-            const dy = e.clientY - this.longPressStartY;
-            if (Math.hypot(dx, dy) > EasyNoteView.LONG_PRESS_SLOP) {
-                clearTimeout(this.longPressTimer);
-                this.longPressTimer = null;
-            }
-        }
-
         const { x: mx, y: my } = this.toCanvasCoords(e);
 
         if (this.tool === 'select') {
@@ -1592,11 +1578,6 @@ class EasyNoteView extends ItemView implements FeatureAPI {
 
     private _onPointerUp(e: PointerEvent): void {
         this.activePointers.delete(e.pointerId);
-        // 手指抬起 → 取消長按計時器
-        if (this.longPressTimer) {
-            clearTimeout(this.longPressTimer);
-            this.longPressTimer = null;
-        }
         // 雙指結束 → 重設 pinch 狀態
         if (this.activePointers.size < 2) {
             this.pinchStartDist = null;
@@ -1688,14 +1669,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         if (this.settings.brushMode === 'stroke-layer' && !this.eraser) {
             this.commitStrokeAsLayer();
         }
-        this.scheduleRender();  // 筆觸結束後確保以完整畫布合成一次, (e) => {
-        this.activePointers.delete(e.pointerId);
-        if (this.longPressTimer) { clearTimeout(this.longPressTimer); this.longPressTimer = null; }
-        if (this.activePointers.size === 0) {
-            this.isPanning     = false;
-            this.pinchStartDist = null;
-            this.pinchStartZoom = null;
-        }
+        this.scheduleRender();  // 筆觸結束後確保以完整畫布合成一次
     }
 
     private _onPointerLeave(e: PointerEvent): void {
