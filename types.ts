@@ -65,7 +65,7 @@ export interface ENote {
 }
 
 export interface ImageLayer {
-    img: HTMLImageElement;
+    img: HTMLImageElement | ImageBitmap;
     x: number;
     y: number;
     w: number;
@@ -168,7 +168,7 @@ export interface MdDragState {
 export interface HistoryEntry {
     label:          string;
     paintData:      ImageData;
-    imageLayers:    { img: HTMLImageElement; x: number; y: number; w: number; h: number; rotation?: number }[];
+    imageLayers:    { img: HTMLImageElement | ImageBitmap; x: number; y: number; w: number; h: number; rotation?: number }[];
     markdownLayers: { text: string; x: number; y: number; fontSize: number; color: string; width: number; linkedNotePath?: string; rotation?: number }[];
     textLayers:     { text: string; x: number; y: number; fontSize: number; color: string; linkedNotePath?: string; rotation?: number }[];
     canvasW:        number;

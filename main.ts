@@ -211,7 +211,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
     private static readonly MAX_HISTORY = 20;
 
     // 內部剪貼簿（Ctrl+C / Ctrl+X）
-    private clipboard: { type: 'image';    img: HTMLImageElement; w: number; h: number }
+    private clipboard: { type: 'image';    img: HTMLImageElement | ImageBitmap; w: number; h: number }
                      | { type: 'text';     layer: TextLayer }
                      | { type: 'markdown'; layer: MarkdownLayer }
                      | { type: 'paint';    offscreen: HTMLCanvasElement; w: number; h: number }
@@ -2077,18 +2077,17 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             dx = nx; dy = ny;
         }
 
-        // Convert to image pixel coordinates
-        const scaleX = lay.img.naturalWidth  / lay.w;
-        const scaleY = lay.img.naturalHeight / lay.h;
-        const imgCX  = (dx + lay.w / 2) * scaleX;
-        const imgCY  = (dy + lay.h / 2) * scaleY;
+        // Convert to image pixel coordinates.
+        // Stroke bitmaps are created pixel-perfect (bitmap size === lay.w × lay.h), so scale = 1.
+        const imgCX  = dx + lay.w / 2;
+        const imgCY  = dy + lay.h / 2;
 
         // Sample area = eraser brush radius in image pixels (min 2px so antialiased edges register)
-        const sampleR = Math.max(2, Math.ceil(this.brushSize / 2 * scaleX));
+        const sampleR = Math.max(2, Math.ceil(this.brushSize / 2));
         const sx = Math.max(0, Math.floor(imgCX - sampleR));
         const sy = Math.max(0, Math.floor(imgCY - sampleR));
-        const sw = Math.min(sampleR * 2 + 1, lay.img.naturalWidth  - sx);
-        const sh = Math.min(sampleR * 2 + 1, lay.img.naturalHeight - sy);
+        const sw = Math.min(sampleR * 2 + 1, lay.w - sx);
+        const sh = Math.min(sampleR * 2 + 1, lay.h - sy);
         if (sw <= 0 || sh <= 0) return false;
 
         // Reuse a shared offscreen canvas to avoid GC pressure
@@ -2098,7 +2097,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         hc.height = sh;
         const hCtx = hc.getContext('2d')!;
         hCtx.clearRect(0, 0, sw, sh);
-        hCtx.drawImage(lay.img, sx, sy, sw, sh, 0, 0, sw, sh);
+        hCtx.drawImage(lay.img as CanvasImageSource, sx, sy, sw, sh, 0, 0, sw, sh);
         const data = hCtx.getImageData(0, 0, sw, sh).data;
         // Any pixel with alpha > 10 counts as a hit
         for (let i = 3; i < data.length; i += 4) {
@@ -2884,36 +2883,34 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         const lh  = ly2 - ly;
         if (lw <= 0 || lh <= 0) { this._strokeDirty = null; return; }
 
-        // 從 paintCanvas（可能縮放）的對應區域拷貝到獨立 canvas
+        // 從 paintCanvas 複製到暫存 canvas，再以 createImageBitmap 轉換（不需 PNG 編解碼）
+        // 延遲 clearRect 到 bitmap 就緒後，確保畫面不會閃空
         const tmp = document.createElement('canvas');
         tmp.width  = lw;
         tmp.height = lh;
-        const tc = tmp.getContext('2d')!;
-        tc.drawImage(
+        tmp.getContext('2d')!.drawImage(
             this.paintCanvas,
             lx * PS, ly * PS, lw * PS, lh * PS,
             0, 0, lw, lh,
         );
 
-        // 清除 paintCanvas 上此筆觸區域
-        this.paintCtx.clearRect(lx * PS, ly * PS, lw * PS, lh * PS);
+        // 立刻清除 dirty rect（避免下一筆開始前被汙染），clearRect 延到 bitmap 就緒
         this._strokeDirty = null;
 
         // 自動命名：Stroke-001, Stroke-002, …
         this._strokeCounter++;
         const strokeName = `Stroke-${String(this._strokeCounter).padStart(3, '0')}`;
 
-        // 建立圖片圖層（帶 strokeName 標記）
-        const img = new Image();
-        img.onload = () => {
-            this.imageLayers.push({ img, x: lx, y: ly, w: lw, h: lh, strokeName });
+        createImageBitmap(tmp).then(bitmap => {
+            // bitmap 就緒後才清除 paintCanvas，確保畫面無閃爍
+            this.paintCtx.clearRect(lx * PS, ly * PS, lw * PS, lh * PS);
+            this.imageLayers.push({ img: bitmap, x: lx, y: ly, w: lw, h: lh, strokeName });
             this.selectedIdx     = -1;
             this.selectedTextIdx = -1;
             this.selectedMdIdx   = -1;
             this.render();
             this.scheduleAutosave();
-        };
-        img.src = tmp.toDataURL('image/png');
+        });
     }
 
     clearCanvas(): void {
@@ -3892,9 +3889,9 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             const paintLayer  = this.paintCanvas.toDataURL('image/png');
             const imageLayers: ENoteImageLayer[] = this.imageLayers.map((lay) => {
                 const tmp  = document.createElement('canvas');
-                tmp.width  = lay.img.naturalWidth  || lay.w;
-                tmp.height = lay.img.naturalHeight || lay.h;
-                tmp.getContext('2d')!.drawImage(lay.img, 0, 0);
+                tmp.width  = lay.img instanceof ImageBitmap ? lay.img.width  : (lay.img.naturalWidth  || lay.w);
+                tmp.height = lay.img instanceof ImageBitmap ? lay.img.height : (lay.img.naturalHeight || lay.h);
+                tmp.getContext('2d')!.drawImage(lay.img as CanvasImageSource, 0, 0);
                 return { src: tmp.toDataURL('image/png'), x: lay.x, y: lay.y, w: lay.w, h: lay.h, rotation: lay.rotation, strokeName: lay.strokeName };
             });
             const project: ENote = {
@@ -3953,9 +3950,9 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             // 圖片層 → 每張先畫到暫存 canvas 取得 data URL
             const imageLayers: ENoteImageLayer[] = this.imageLayers.map((lay) => {
                 const tmp   = document.createElement('canvas');
-                tmp.width   = lay.img.naturalWidth  || lay.w;
-                tmp.height  = lay.img.naturalHeight || lay.h;
-                tmp.getContext('2d')!.drawImage(lay.img, 0, 0);
+                tmp.width   = lay.img instanceof ImageBitmap ? lay.img.width  : (lay.img.naturalWidth  || lay.w);
+                tmp.height  = lay.img instanceof ImageBitmap ? lay.img.height : (lay.img.naturalHeight || lay.h);
+                tmp.getContext('2d')!.drawImage(lay.img as CanvasImageSource, 0, 0);
                 return { src: tmp.toDataURL('image/png'), x: lay.x, y: lay.y, w: lay.w, h: lay.h, rotation: lay.rotation, strokeName: lay.strokeName };
             });
 
