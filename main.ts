@@ -162,6 +162,8 @@ class EasyNoteView extends ItemView implements FeatureAPI {
     private _vpCache:  HTMLCanvasElement | null = null;
     private _vpCacheX = 0;  // viewport 左上角（畫布邏輯座標）
     private _vpCacheY = 0;
+    /** stroke-layer 模式：直接貼 display canvas，完全跳過 rAF 合成管線 */
+    private _wetLayerActive = false;
 
     // stroke-layer 模式：筆觸 dirty rect 追蹤 & 自動命名計數器
     private _strokeDirty:   { x1: number; y1: number; x2: number; y2: number } | null = null;
@@ -1662,6 +1664,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         this.multiSelDrag  = null;
         this.drawing       = false;
         this._vpCache      = null;  // 清除 viewport cache，觸發下一次完整渲染
+        this._wetLayerActive = false;
         this.dragState     = null;
         this.textDragState = null;
         this.mdDragState   = null;
@@ -1681,8 +1684,9 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         if (this.drawing && this.settings.brushMode === 'stroke-layer' && !this.eraser) {
             this.commitStrokeAsLayer();
         }
-        this.drawing       = false;
-        this._vpCache      = null;
+        this.drawing         = false;
+        this._vpCache        = null;
+        this._wetLayerActive = false;
         this.dragState     = null;
         this.textDragState = null;
         this.mdDragState   = null;
@@ -2766,6 +2770,12 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             this._vpCacheX * PS, this._vpCacheY * PS, vw * PS, vh * PS,
             0, 0, vw, vh,
         );
+        // stroke-layer 筆觸：預先完整合成 display canvas 作為 wet base，
+        // 之後每筆 delta 直接貼上，完全跳過 rAF 合成管線
+        if (this.settings.brushMode === 'stroke-layer' && !this.eraser) {
+            this.render();
+            this._wetLayerActive = true;
+        }
     }
 
     /** 將同一筆觸同步寫入 viewport cache（canvas 座標，無 PS 縮放） */
@@ -2824,7 +2834,22 @@ class EasyNoteView extends ItemView implements FeatureAPI {
                 this._strokeDirty.y2 = Math.max(this._strokeDirty.y2, y + r);
             }
         }
-        this.scheduleRender();
+        if (this._wetLayerActive) {
+            // wet-layer：直接貼 display canvas，無 rAF 延遲
+            this.ctx.save();
+            this.ctx.globalCompositeOperation = 'source-over';
+            this.ctx.globalAlpha = this.brushOpacity;
+            this.ctx.strokeStyle = this.colors[this.colorIdx];
+            this.ctx.lineWidth   = this.brushSize;
+            this.ctx.lineCap     = 'round';
+            this.ctx.beginPath();
+            this.ctx.moveTo(x, y);
+            this.ctx.lineTo(x, y);
+            this.ctx.stroke();
+            this.ctx.restore();
+        } else {
+            this.scheduleRender();
+        }
     }
 
     private paintStroke(x1: number, y1: number, x2: number, y2: number): void {
@@ -2864,7 +2889,23 @@ class EasyNoteView extends ItemView implements FeatureAPI {
                 this._strokeDirty.y2 = Math.max(this._strokeDirty.y2, maxY);
             }
         }
-        this.scheduleRender();
+        if (this._wetLayerActive) {
+            // wet-layer：直接貼 display canvas，無 rAF 延遲
+            this.ctx.save();
+            this.ctx.globalCompositeOperation = 'source-over';
+            this.ctx.globalAlpha = this.brushOpacity;
+            this.ctx.strokeStyle = this.colors[this.colorIdx];
+            this.ctx.lineWidth   = this.brushSize;
+            this.ctx.lineCap     = 'round';
+            this.ctx.lineJoin    = 'round';
+            this.ctx.beginPath();
+            this.ctx.moveTo(x1, y1);
+            this.ctx.lineTo(x2, y2);
+            this.ctx.stroke();
+            this.ctx.restore();
+        } else {
+            this.scheduleRender();
+        }
     }
 
     /** stroke-layer 模式：將 paintCanvas 上當前筆觸提取為圖片圖層，並清除對應區域 */
