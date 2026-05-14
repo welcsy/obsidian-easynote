@@ -70,6 +70,7 @@ export const TRANSLATIONS: Record<string, { zh: string; en: string }> = {
     'status.toolText':     { zh: '工具: 文字', en: 'Tool: Text' },
     'status.font':         { zh: '字體', en: 'Font' },
     'status.toolPaintSel': { zh: '工具: 繪畫選取', en: 'Tool: Paint Select' },
+    'status.toolPan':      { zh: '平移', en: 'Pan' },
     'status.hasFrag':      { zh: '已選取區塊', en: 'Region selected' },
     'status.paintHint':    { zh: 'Enter 確認　Esc 取消　Del 棄用', en: 'Enter: confirm  Esc: cancel  Del: discard' },
     'status.tool':         { zh: '工具', en: 'Tool' },

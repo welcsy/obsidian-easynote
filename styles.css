@@ -306,7 +306,6 @@
 .easynote-btn-save {
     background:   var(--interactive-accent);
     color:        var(--text-on-accent);
-    border-color: var(--interactive-accent);
 }
 
 .easynote-btn-save:hover {

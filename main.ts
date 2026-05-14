@@ -596,14 +596,6 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             new VaultNotePickerModal(this.app, (file) => this.addLinkedMarkdownLayer(file)).open();
         });
 
-        // 平移鎖定工具（安全瀏覽，不會誤觸任何圖層）
-        this.panLockBtn = imageGroup.createEl('button', {
-            cls:   'easynote-btn easynote-btn-icon',
-            title: t('tb.pan.title'),
-        });
-        setIcon(this.panLockBtn, 'hand');
-        this.panLockBtn.addEventListener('click', () => this.setTool('pan'));
-
         // 目前圕層類型標示（右側，已隱藏）
         imageGroup.createEl('div', { cls: 'easynote-spacer' });
         this.activeLayerLabel = imageGroup.createEl('span', { cls: 'easynote-active-layer' });
@@ -686,6 +678,14 @@ class EasyNoteView extends ItemView implements FeatureAPI {
 
         const canvasActions = row2.createEl('div', { cls: 'easynote-canvas-actions-wrap' });
 
+        // 平移鎖定工具
+        this.panLockBtn = canvasActions.createEl('button', {
+            cls:   'easynote-btn easynote-btn-icon',
+            title: t('tb.pan.title'),
+        });
+        setIcon(this.panLockBtn, 'hand');
+        this.panLockBtn.addEventListener('click', () => this.setTool('pan'));
+
         // 開啟新畫布
         const newCanvasBtn = canvasActions.createEl('button', {
             cls:   'easynote-btn',
@@ -709,7 +709,6 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             this.refreshUndoRedo();
             this.refreshStatus();
         });
-        canvasActions.createEl('div', { cls: 'easynote-sep' });
 
         // 畫布大小（直立模式下與儲存/載入/匯出同列）
         const canvasSizeBtn = canvasActions.createEl('button', {
@@ -3494,10 +3493,11 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         } else if (this.tool === 'paintselect') {
             const fragStr = this.paintFragment ? ` | ${t('status.hasFrag')}` : '';
             this.statusLabel.textContent = `${t('status.toolPaintSel')}${fragStr} | ${t('status.paintHint')} | ${zoomStr} | ${saveStr}`;
+        } else if (this.tool === 'pan') {
+            this.statusLabel.textContent = `${t('status.tool')}: ${t('status.toolPan')} | ${zoomStr} | ${saveStr}`;
         } else {
             const toolName = this.eraser ? t('status.eraser') : `${t(`color.${this.colorIdx}`)} ${t('status.pencil')}`;
-            const opPct    = Math.round(this.brushOpacity * 100);
-            this.statusLabel.textContent = `${t('status.tool')}: ${toolName} | ${t('status.size')}: ${this.brushSize} | ${t('status.opacity')}: ${opPct}% | ${zoomStr} | ${saveStr}`;
+            this.statusLabel.textContent = `${t('status.tool')}: ${toolName} | ${zoomStr} | ${saveStr}`;
         }
     }
 
