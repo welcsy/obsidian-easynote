@@ -241,6 +241,8 @@ class EasyNoteView extends ItemView implements FeatureAPI {
     private _canvasInput!:  CanvasInputHandler;
     private _mobileInput!:  MobileLongPressHandler;
     private _onResize!:  ()                  => void;
+    /** 捲動區域佔位元素：CSS 尺寸 = logicalW×zoom × logicalH×zoom，驅動卷軸 */
+    private _scrollSpacer!: HTMLDivElement;
     // Vault 檔案變更監聽（雙向同步）
     private _vaultModifyRef:      import('obsidian').EventRef | null = null;
     private _suppressVaultModify  = false;
@@ -715,7 +717,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             title: t('tb.canvasSize.title'),
         });
         canvasSizeBtn.addEventListener('click', () => {
-            new CanvasSizeModal(this.app, this.canvas.width, this.canvas.height,
+            new CanvasSizeModal(this.app, this.manualWidth, this.manualHeight,
                 (w, h) => this.setCanvasSize(w, h)).open();
         });
         canvasActions.createEl('div', { cls: 'easynote-sep' });
@@ -804,12 +806,23 @@ class EasyNoteView extends ItemView implements FeatureAPI {
     // ── Canvas 建構 ───────────────────────────────────────────────────────────
     private buildCanvas(root: HTMLElement): void {
         this.canvasWrapper = root.createEl('div', { cls: 'easynote-canvas-wrapper' });
+
+        // 佔位元素：CSS 尺寸 = logical × zoom，驅動捲軸（不佔 GPU 記憶體）
+        this._scrollSpacer = this.canvasWrapper.createEl('div') as HTMLDivElement;
+        this._scrollSpacer.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;';
+
+        // Canvas 本體：永遠 viewport 大小（不再等於邏輯畫布大小）
+        // 這樣就算 canvas 是 15360×8640，GPU 只需要配置視窗大小的 texture
         this.canvas = this.canvasWrapper.createEl('canvas', { cls: 'easynote-canvas' });
+        this.canvas.style.position = 'sticky';
+        this.canvas.style.top      = '0';
+        this.canvas.style.left     = '0';
+
         const ctx = this.canvas.getContext('2d');
         if (!ctx) { new Notice('EasyNote：無法取得 Canvas 2D context'); return; }
         this.ctx = ctx;
 
-        // offscreen 筆畫 canvas
+        // offscreen 筆畫 canvas（viewport-sized 草稿區，不需要全畫布大小）
         this.paintCanvas = document.createElement('canvas');
         const pctx = this.paintCanvas.getContext('2d');
         if (!pctx) { new Notice('EasyNote：無法取得 paint canvas context'); return; }
@@ -823,47 +836,66 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         document.body.appendChild(dot);
         this._cursorDot = dot;
 
-        // 捲動時重新渲染可見 viewport（viewport culling 架構需要）
+        // 捲動時重新渲染可見 viewport
         this.canvasWrapper.addEventListener('scroll', () => {
             if (!this.drawing) this.render();
         }, { passive: true });
-
-        // ── 滑鼠事件 ──────────────────────────────────────────────────────────
 
         // -- Canvas pointer events (Device Layer via CanvasInputHandler) --------
         this._canvasInput = new CanvasInputHandler(this);
         this._canvasInput.bind(this.canvas);
     }
 
+    /** 更新佔位 div 的 CSS 尺寸，使 canvasWrapper 出現對應大小的捲軸 */
+    private updateScrollSpacer(): void {
+        const lw = this.manualWidth  > 0 ? this.manualWidth  : Math.max(1, this.canvasWrapper.clientWidth  / this.zoom);
+        const lh = this.manualHeight > 0 ? this.manualHeight : Math.max(1, this.canvasWrapper.clientHeight / this.zoom);
+        this._scrollSpacer.style.width  = `${Math.round(lw * this.zoom)}px`;
+        this._scrollSpacer.style.height = `${Math.round(lh * this.zoom)}px`;
+    }
+
     // ── Canvas 大小調整 ───────────────────────────────────────────────────────
 
-    private applyCanvasSize(w: number, h: number): void {
-        // 向量模式：paintCanvas 改為 viewport 大小，不再跟畫布尺寸綁定
-        // 只需調整顯示 canvas 尺寸即可
-        this.canvas.width  = w;
-        this.canvas.height = h;
-        this.render();
+    private applyCanvasSize(_w: number, _h: number): void {
+        // 向量 + viewport-canvas 模式：邏輯尺寸已存入 manualWidth/Height，
+        // canvas 元素本身保持 viewport 大小，只需更新捲軸佔位元素
         this.applyZoom();
+    }
+
+    /** 將 canvas 元素大小對齊目前 viewport，更新捲軸佔位元素 */
+    private applyZoom(): void {
+        const vw = Math.max(1, this.canvasWrapper.clientWidth);
+        const vh = Math.max(1, this.canvasWrapper.clientHeight);
+        // 只有尺寸真的改變時才 reset（改 canvas.width/height 會清除內容）
+        if (this.canvas.width !== vw || this.canvas.height !== vh) {
+            this.canvas.width  = vw;
+            this.canvas.height = vh;
+        }
+        this.updateScrollSpacer();
     }
 
     private resizeCanvas(fromWindowResize = false): void {
         if (this.manualWidth > 0 && this.manualHeight > 0) {
-            // 視窗縮放事件不重設手動尺寸（避免清空畫布），只在初始化時套用
-            if (!fromWindowResize) {
-                this.applyCanvasSize(this.manualWidth, this.manualHeight);
-            }
+            // 視窗縮放事件不重設手動尺寸，但仍需更新 canvas 大小（跟 viewport 同步）
+            this.applyZoom();
+            if (!fromWindowResize) this.render();
             return;
         }
+        // 無手動尺寸：以 viewport 大小作為邏輯畫布尺寸
         const w = Math.max(1, this.canvasWrapper.clientWidth);
         const h = Math.max(1, this.canvasWrapper.clientHeight);
-        this.applyCanvasSize(w, h);
+        this.manualWidth  = w;
+        this.manualHeight = h;
+        this.applyZoom();
+        this.render();
     }
 
     setCanvasSize(w: number, h: number): void {
-        this.pushHistory('調整畫布大小');                 // 調整畫布前先存快照
+        this.pushHistory('調整畫布大小');
         this.manualWidth  = w;
         this.manualHeight = h;
-        this.applyCanvasSize(w, h);
+        this.applyZoom();
+        this.render();
     }
 
     // -- Canvas pointer events (Feature Layer implementation) ------------------
@@ -1863,43 +1895,44 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         }
     }
 
-    /** 套用目前縮放比例到 canvas CSS 尺寸 */
-    private applyZoom(): void {
-        this.canvas.style.width  = `${this.canvas.width  * this.zoom}px`;
-        this.canvas.style.height = `${this.canvas.height * this.zoom}px`;
-    }
-
-    /** 將滑鼠 offsetX/offsetY (CSS px) 轉換為畫布邏輯座標 */
+    /** 將滑鼠 clientX/Y 轉換為畫布邏輯（世界）座標 */
     private toCanvasCoords(e: MouseEvent | PointerEvent): { x: number; y: number } {
         const rect = this.canvas.getBoundingClientRect();
+        // canvas 是 sticky 元素（rect.left/top 固定於 viewport 左上角）
+        // 需加上 scroll offset 才能得到世界座標
         return {
-            x: (e.clientX - rect.left) / this.zoom,
-            y: (e.clientY - rect.top)  / this.zoom,
+            x: (e.clientX - rect.left + this.canvasWrapper.scrollLeft) / this.zoom,
+            y: (e.clientY - rect.top  + this.canvasWrapper.scrollTop)  / this.zoom,
         };
     }
 
     // ── 合成渲染 ──────────────────────────────────────────────────────────────
 
     private render(clip?: { x: number; y: number; w: number; h: number }): void {
-        // 計算當前可見 viewport（畫布座標）；clip 優先，否則從捲動位置計算
-        const vp = clip ?? this.getViewportRect();
+        const vp = this.getViewportRect();
+        const sl = this.canvasWrapper.scrollLeft;
+        const st = this.canvasWrapper.scrollTop;
+
+        // ── Step 1: 清除整個 viewport canvas（screen space，無 transform）──
+        this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+        // ── Step 2: 套用世界→畫面 transform：zoom + 捲動偏移 ──────────────
+        // (wx, wy) → canvas px (wx*zoom − scrollLeft, wy*zoom − scrollTop)
+        this.ctx.save();
+        this.ctx.setTransform(this.zoom, 0, 0, this.zoom, -sl, -st);
 
         if (clip) {
-            // 項目區域渲染：僅清除 + 重繪可見 viewport，其餘區域像素不動
-            const { x, y, w, h } = clip;
+            // 僅重繪 clip 範圍（世界座標裁切）
             this.ctx.save();
             this.ctx.beginPath();
-            this.ctx.rect(x, y, w, h);
+            this.ctx.rect(clip.x, clip.y, clip.w, clip.h);
             this.ctx.clip();
-            this.ctx.clearRect(x, y, w, h);
-            this.ctx.fillStyle = '#ffffff';
-            this.ctx.fillRect(x, y, w, h);
-        } else {
-            this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-            // 1. 白底
-            this.ctx.fillStyle = '#ffffff';
-            this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
         }
+
+        // 1. 白底（只填邏輯畫布區域，其餘透明 → wrapper 深色背景透出）
+        this.ctx.fillStyle = '#ffffff';
+        this.ctx.fillRect(0, 0, this.manualWidth, this.manualHeight);
         // 2. 圖片層（底部）— viewport culling
         for (const lay of this.imageLayers) {
             const rot = lay.rotation || 0;
@@ -2054,7 +2087,8 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             }
         }
         // 每次畫面更新後排程自動儲存（debounce）
-        if (clip) this.ctx.restore();
+        if (clip) this.ctx.restore();   // 回復 clip
+        this.ctx.restore();             // 回復 setTransform
         this.scheduleAutosave();
     }
 
@@ -2942,19 +2976,8 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         if (this._rafId !== null) return;
         this._rafId = requestAnimationFrame(() => {
             this._rafId = null;
-            if (this.drawing) {
-                // 繪畫中只重繪可見的 viewport 區域，避免 composite 整個大畫布
-                const sl = this.canvasWrapper.scrollLeft;
-                const st = this.canvasWrapper.scrollTop;
-                this.render({
-                    x: sl / this.zoom,
-                    y: st / this.zoom,
-                    w: this.canvasWrapper.clientWidth  / this.zoom,
-                    h: this.canvasWrapper.clientHeight / this.zoom,
-                });
-            } else {
-                this.render();
-            }
+            // viewport-canvas 模式：canvas 就是 viewport，直接 render 即可
+            this.render();
         });
     }
 
@@ -3026,7 +3049,11 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         // ── 即時視覺反饋 ────────────────────────────────────────────────────
         if (this._wetLayerActive && !this.eraser) {
             // 非橡皮擦：直接貼 display canvas（零延遲）
+            // 需套用與 render() 相同的世界→畫面 transform
+            const sl = this.canvasWrapper.scrollLeft;
+            const st = this.canvasWrapper.scrollTop;
             this.ctx.save();
+            this.ctx.setTransform(this.zoom, 0, 0, this.zoom, -sl, -st);
             this.ctx.globalCompositeOperation = 'source-over';
             this.ctx.globalAlpha = this.brushOpacity;
             this.ctx.strokeStyle = this.colors[this.colorIdx];
@@ -3057,7 +3084,11 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         }
         // ── 即時視覺反饋 ────────────────────────────────────────────────────
         if (this._wetLayerActive && !this.eraser) {
+            // 套用世界→畫面 transform（與 render() 一致）
+            const sl = this.canvasWrapper.scrollLeft;
+            const st = this.canvasWrapper.scrollTop;
             this.ctx.save();
+            this.ctx.setTransform(this.zoom, 0, 0, this.zoom, -sl, -st);
             this.ctx.globalCompositeOperation = 'source-over';
             this.ctx.globalAlpha = this.brushOpacity;
             this.ctx.strokeStyle = this.colors[this.colorIdx];
@@ -3306,8 +3337,8 @@ class EasyNoteView extends ItemView implements FeatureAPI {
     private loadImageFromUrl(url: string): void {
         const img = new Image();
         img.onload = () => {
-            const cw = this.canvas.width;
-            const ch = this.canvas.height;
+            const cw = this.manualWidth;
+            const ch = this.manualHeight;
             const scale = Math.min(cw / img.naturalWidth, ch / img.naturalHeight, 1);
             const w = Math.round(img.naturalWidth  * scale);
             const h = Math.round(img.naturalHeight * scale);
@@ -3529,8 +3560,8 @@ class EasyNoteView extends ItemView implements FeatureAPI {
                 color: ml.color, width: ml.width, linkedNotePath: ml.linkedNotePath, rotation: ml.rotation,
             })),
             textLayers:     this.textLayers.map(tl => ({ ...tl })),
-            canvasW:        this.canvas.width,
-            canvasH:        this.canvas.height,
+            canvasW:        this.manualWidth,
+            canvasH:        this.manualHeight,
         };
         this.history.push(entry);
         if (this.history.length > EasyNoteView.MAX_HISTORY) {
@@ -3543,11 +3574,10 @@ class EasyNoteView extends ItemView implements FeatureAPI {
 
     private restoreHistory(entry: HistoryEntry): void {
         // 若畫布尺寸不同需先調整
-        if (this.canvas.width !== entry.canvasW || this.canvas.height !== entry.canvasH) {
-            this.canvas.width  = entry.canvasW;
-            this.canvas.height = entry.canvasH;
-            this.manualWidth   = entry.canvasW;
-            this.manualHeight  = entry.canvasH;
+        if (this.manualWidth !== entry.canvasW || this.manualHeight !== entry.canvasH) {
+            this.manualWidth  = entry.canvasW;
+            this.manualHeight = entry.canvasH;
+            this.applyZoom();
         }
         this.strokePaths     = [...entry.strokePaths];
         this.imageLayers     = entry.imageLayers.map(l => ({ ...l }));
@@ -3638,7 +3668,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         }
         this.refreshStatus();
     }
-    resetZoom(): void { this.zoom = 1.0; this.applyZoom(); this.refreshStatus(); }
+    resetZoom(): void { this.zoom = 1.0; this.applyZoom(); this.render(); this.refreshStatus(); }
     zoomAtCursor(clientX: number, clientY: number, deltaY: number): void {
         const ZOOM_STEP = 0.1; const MIN_ZOOM = 0.1; const MAX_ZOOM = 8.0;
         const oldZoom = this.zoom;
@@ -3652,6 +3682,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         this.applyZoom();
         this.canvasWrapper.scrollLeft = (prevSL + cx) * ratio - cx;
         this.canvasWrapper.scrollTop  = (prevST + cy) * ratio - cy;
+        this.render();
         this.refreshStatus();
     }
     pasteImageFromFile(file: File): void { this.loadImageFromBlob(file); }
@@ -3975,7 +4006,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             }
             this.pushHistory('貼上繪畫');
             const c = this.clipboard;
-            const px = Math.max(0, Math.floor((this.canvas.width  - c.w) / 2));
+            const px = Math.max(0, Math.floor((this.manualWidth  - c.w) / 2));
             const py = Math.max(0, Math.floor((this.canvas.height - c.h) / 2));
             const newOffscreen = document.createElement('canvas');
             newOffscreen.width  = c.offscreen.width;
@@ -3992,7 +4023,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         const OFFSET = 20;
         if (this.clipboard.type === 'image') {
             const c = this.clipboard;
-            const x = Math.min(OFFSET, this.canvas.width  - c.w);
+            const x = Math.min(OFFSET, this.manualWidth  - c.w);
             const y = Math.min(OFFSET, this.canvas.height - c.h);
             this.imageLayers.push({ img: c.img, x, y, w: c.w, h: c.h });
             this.selectedIdx     = this.imageLayers.length - 1;
@@ -4127,8 +4158,8 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             });
             const project: ENote = {
                 version:        2,
-                canvasWidth:    this.canvas.width,
-                canvasHeight:   this.canvas.height,
+                canvasWidth:    this.manualWidth,
+                canvasHeight:   this.manualHeight,
                 strokePaths:    this.strokePaths,
                 imageLayers,
                 markdownLayers: this.markdownLayers.map(ml => ({
@@ -4186,8 +4217,8 @@ class EasyNoteView extends ItemView implements FeatureAPI {
 
             const project: ENote = {
                 version:        2,
-                canvasWidth:    this.canvas.width,
-                canvasHeight:   this.canvas.height,
+                canvasWidth:    this.manualWidth,
+                canvasHeight:   this.manualHeight,
                 strokePaths:    this.strokePaths,
                 imageLayers,
                 markdownLayers: this.markdownLayers.map(ml => ({
@@ -4230,11 +4261,9 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             this.mdDragState     = null;
             this.paintFragment   = null;
 
-            // 設定畫布尺寸（直接寫，不復原舊內容）
+            // 設定畫布尺寸（viewport-canvas 模式：只更新邏輯尺寸）
             this.manualWidth  = project.canvasWidth;
             this.manualHeight = project.canvasHeight;
-            this.canvas.width  = project.canvasWidth;
-            this.canvas.height = project.canvasHeight;
 
             // 載入向量筆觸（v2）或舊版 paintLayer PNG（v1 → 轉為圖片圖層）
             this.strokePaths = (project.strokePaths ?? []) as VectorStroke[];
@@ -4319,7 +4348,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             y:              20,
             fontSize:       16,
             color:          '#000000',
-            width:          Math.min(600, Math.max(200, this.canvas.width - 60)),
+            width:          Math.min(600, Math.max(200, this.manualWidth - 60)),
             linkedNotePath: file.path,
         };
         ml.text = await this.app.vault.read(file);
@@ -4728,7 +4757,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             lines.push(``);
             lines.push(`> 匯出時間：${ts}`);
             lines.push(`> 畫布名稱：${this.lastProjectName || '（未命名）'}`);
-            lines.push(`> 畫布尺寸：${this.canvas.width} × ${this.canvas.height} px`);
+            lines.push(`> 畫布尺寸：${this.manualWidth} × ${this.manualHeight} px`);
             lines.push(``);
             lines.push(`---`);
             lines.push(``);
@@ -4922,8 +4951,8 @@ class EasyNoteView extends ItemView implements FeatureAPI {
 
             // 合成到暫存 canvas（去掉選取框線）
             const tmp = document.createElement('canvas');
-            tmp.width  = this.canvas.width;
-            tmp.height = this.canvas.height;
+            tmp.width  = this.manualWidth;
+            tmp.height = this.manualHeight;
             const tc   = tmp.getContext('2d')!;
             tc.fillStyle = '#ffffff';
             tc.fillRect(0, 0, tmp.width, tmp.height);
@@ -4965,8 +4994,10 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             for (const ml of this.markdownLayers) {
                 this.drawMarkdownContent(tc, ml);
             }
-            // 繪畫層（上方）— paintCanvas 可能是 PS 縮放尺寸，拉伸回全畫布
-            tc.drawImage(this.paintCanvas, 0, 0, this.canvas.width, this.canvas.height);
+            // 繪畫層（上方）— 重播向量筆觸（viewport-canvas 模式，paintCanvas 不含完整內容）
+            for (const s of this.strokePaths) {
+                this.replayStroke(tc, s, 0, 0);
+            }
             // 若有浮動 fragment，也合入存圖
             if (this.paintFragment) {
                 const f = this.paintFragment;

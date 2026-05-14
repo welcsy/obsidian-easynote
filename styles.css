@@ -340,6 +340,7 @@
     flex:       1;
     overflow:   auto;
     background: #1e1e1e;
+    position:   relative; /* 必須：讓 _scrollSpacer absolute 定位基準 */
 }
 
 /* 捲軸樣式（淺灰，深淺色 Obsidian 主題皆適用） */
@@ -358,14 +359,13 @@
     background: #ffffff;
 }
 
-/* 畫布本體：十字鼠標，大小由 JS 控制 */
+/* 畫布本體：十字鼠標，大小在 JS 控制 */
 .easynote-canvas {
     display:      block;
     cursor:       crosshair;
-    background:   #ffffff;
     touch-action: none;
-    /* 加陰影讓畫布邊界更清楚 */
-    box-shadow:   0 2px 8px rgba(0,0,0,0.18);
+    /* background 移除：白底改由 render() 填充都邏輯畫布區域 */
+    /* box-shadow 移除：邏輯畫布邊界改由 render() 處理 */
 }
 
 /* 自訂游標 dot（fixed overlay，pointer-events:none 不攔截事件） */
