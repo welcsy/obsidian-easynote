@@ -766,11 +766,12 @@ class EasyNoteView extends ItemView implements FeatureAPI {
 
         canvasActions.createEl('div', { cls: 'easynote-spacer' });
 
-        // 定時 auto-sync 開關按鈕
+        // 定時 auto-sync 開關按鈕（隱藏）
         this.autoSyncBtn = canvasActions.createEl('button', {
             cls:   'easynote-btn easynote-btn-icon',
             title: t('tb.autoSync.title'),
         });
+        this.autoSyncBtn.style.display = 'none';
         setIcon(this.autoSyncBtn, 'refresh-cw');
         this.autoSyncBtn.addEventListener('click', () => {
             this.settings.autoSyncEnabled = !this.settings.autoSyncEnabled;
@@ -783,11 +784,12 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             this.refreshStatus();
         });
 
-        // 定時 auto-save 開關按鈕
+        // 定時 auto-save 開關按鈕（隱藏）
         this.autoPeriodicSaveBtn = canvasActions.createEl('button', {
             cls:   'easynote-btn easynote-btn-icon',
             title: t('tb.autoSave.title'),
         });
+        this.autoPeriodicSaveBtn.style.display = 'none';
         setIcon(this.autoPeriodicSaveBtn, 'clock');
         this.autoPeriodicSaveBtn.addEventListener('click', () => {
             this.settings.autoPeriodicSaveEnabled = !this.settings.autoPeriodicSaveEnabled;
@@ -5617,8 +5619,11 @@ class EasyNoteSettingTab extends PluginSettingTab {
                     })
             );
 
-        // 定時 auto-sync
-        new Setting(containerEl)
+        // 定時 auto-sync / auto-save（隱藏，功能保留）
+        const hiddenTimerSettings = containerEl.createDiv();
+        hiddenTimerSettings.style.display = 'none';
+
+        new Setting(hiddenTimerSettings)
             .setName(t('settings.autoSync'))
             .setDesc(t('settings.autoSync.desc'))
             .addToggle((toggle) => {
@@ -5629,7 +5634,7 @@ class EasyNoteSettingTab extends PluginSettingTab {
                 });
             });
 
-        new Setting(containerEl)
+        new Setting(hiddenTimerSettings)
             .setName(t('settings.autoSyncPeriod'))
             .setDesc(t('settings.autoSyncPeriod.desc'))
             .addText((text) =>
@@ -5645,8 +5650,7 @@ class EasyNoteSettingTab extends PluginSettingTab {
                     })
             );
 
-        // 定時 auto-save
-        new Setting(containerEl)
+        new Setting(hiddenTimerSettings)
             .setName(t('settings.autoSave'))
             .setDesc(t('settings.autoSave.desc'))
             .addToggle((toggle) => {
@@ -5657,7 +5661,7 @@ class EasyNoteSettingTab extends PluginSettingTab {
                 });
             });
 
-        new Setting(containerEl)
+        new Setting(hiddenTimerSettings)
             .setName(t('settings.autoSavePeriod'))
             .setDesc(t('settings.autoSavePeriod.desc'))
             .addText((text) =>
