@@ -1,6 +1,6 @@
 {
   "name": "easynote",
-  "version": "1.2.11",
+  "version": "1.2.12",
   "description": "Obsidian drawing plugin with Pixel / Image brush modes, touch gestures, and .enote project format",
   "main": "main.js",
   "scripts": {

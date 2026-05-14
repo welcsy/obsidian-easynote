@@ -37,7 +37,7 @@ export const TRANSLATIONS: Record<string, { zh: string; en: string }> = {
     'tb.undo.title':      { zh: '上一步 (Ctrl+Z)', en: 'Undo (Ctrl+Z)' },
     'tb.undoSelect.title':{ zh: '選擇要回到哪一步', en: 'Choose undo step' },
     'tb.redo.title':      { zh: '下一步 (Ctrl+Y)', en: 'Redo (Ctrl+Y)' },
-    'tb.redoSelect.title':{ zh: '選擇要唤復哪一步', en: 'Choose redo step' },
+    'tb.redoSelect.title':{ zh: '選擇要跳到哪一步', en: 'Choose redo step' },
     'tb.newCanvas':       { zh: '開啟新畫布', en: 'New Canvas' },
     'tb.newCanvas.title': { zh: '清空所有圖層，開始全新畫布（不可復原）', en: 'Clear all layers and start fresh (irreversible)' },
     'tb.canvasSize':      { zh: '畫布大小', en: 'Canvas Size' },
