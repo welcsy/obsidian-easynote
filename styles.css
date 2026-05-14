@@ -636,26 +636,8 @@
     flex: 1;
 }
 
-/* ── Android 觸控裝置：工具列 icon 放大 125% ─────────────────────────── */
+/* ── Android 觸控裝置：捲軸放大 ─────────────────────────────────────── */
 @media (hover: none) and (pointer: coarse) {
-    .easynote-btn.easynote-btn-icon {
-        width:  35px;
-        height: 35px;
-    }
-    .easynote-btn.easynote-btn-icon svg {
-        width:  20px;
-        height: 20px;
-    }
-    .easynote-color-btn {
-        width:  33px;
-        height: 33px;
-    }
-    .easynote-group {
-        height: auto;
-        min-height: 44px;
-        padding-top:    4px;
-        padding-bottom: 4px;
-    }
     /* 捲軸在觸控裝置上放大，更容易看到與操作 */
     .easynote-canvas-wrapper::-webkit-scrollbar {
         width:  8px;

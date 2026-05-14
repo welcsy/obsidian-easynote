@@ -25,6 +25,8 @@ export interface EasyNoteSettings {
     googleDriveFolderId:   string;
     // 介面語言
     language?: 'zh' | 'en';
+    // 工具列縮放比例（1.0 = 不縮放）
+    toolbarZoom?: number;
 }
 export const DEFAULT_SETTINGS: EasyNoteSettings = {
     defaultColorIdx:  0,
@@ -48,6 +50,7 @@ export const DEFAULT_SETTINGS: EasyNoteSettings = {
     googleTokenExpiry:     0,
     googleDriveFolderId:   '',
     language:              'zh',
+    toolbarZoom:           1.0,
 };
 
 // ─── 向量筆觸 ─────────────────────────────────────────────────────────────────

@@ -136,6 +136,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
     private colorNames: string[] = [...COLOR_NAMES];
 
     // 工具列 DOM
+    private _toolbarEl!:       HTMLDivElement;
     private statusLabel!:     HTMLSpanElement;
     private eraserBtn!:        HTMLButtonElement;
     private selectBtn!:        HTMLButtonElement;
@@ -382,6 +383,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
     // ── 工具列建構 ────────────────────────────────────────────────────────────
     private buildToolbar(root: HTMLElement): void {
         const bar = root.createEl('div', { cls: 'easynote-toolbar' });
+        this._toolbarEl = bar;
 
         // ── Group 1: 插畫 ─────────────────────────────────────────────────────
         const drawGroup = bar.createEl('div', { cls: 'easynote-group' });
@@ -789,6 +791,15 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         });
 
         this.statusLabel = statusGroup.createEl('span', { cls: 'easynote-status' });
+        this.applyToolbarZoom();
+    }
+
+    /** 套用 toolbarZoom 設定到工具列 */
+    applyToolbarZoom(): void {
+        const zoom = this.settings.toolbarZoom ?? 1.0;
+        if (this._toolbarEl) {
+            (this._toolbarEl.style as unknown as Record<string, string>)['zoom'] = zoom === 1.0 ? '' : String(zoom);
+        }
     }
 
     // ── Canvas 建構 ───────────────────────────────────────────────────────────
@@ -5590,6 +5601,25 @@ class EasyNoteSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 });
             });
+
+        // 工具列縮放比例
+        new Setting(containerEl)
+            .setName(t('settings.toolbarZoom'))
+            .setDesc(t('settings.toolbarZoom.desc'))
+            .addSlider((slider) =>
+                slider
+                    .setLimits(50, 100, 5)
+                    .setValue(Math.round((this.plugin.settings.toolbarZoom ?? 1.0) * 100))
+                    .setDynamicTooltip()
+                    .onChange(async (value) => {
+                        this.plugin.settings.toolbarZoom = value / 100;
+                        await this.plugin.saveSettings();
+                        // 即時套用到所有已開啟的視圖
+                        this.app.workspace.getLeavesOfType(VIEW_TYPE).forEach(leaf => {
+                            (leaf.view as EasyNoteView).applyToolbarZoom();
+                        });
+                    })
+            );
 
         // 時區
         new Setting(containerEl)
