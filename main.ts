@@ -327,7 +327,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         });
 
         this.refreshColorBtns();
-        this.refreshStatus();
+        this.setTool('pan');   // 初始工具：平移，確保按鈕呈現 active 狀態
 
         // 啟動模式：載入自動暗存 or 新畫布
         const autosavePath = normalizePath(
@@ -1741,6 +1741,11 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         if (e.button === 1) {
             this.isPanning = false;
             this.canvas.style.cursor = this.tool === 'draw' ? 'crosshair' : (this.tool === 'text' ? EasyNoteView.CURSOR_TEXT : (this.tool === 'paintselect' ? EasyNoteView.CURSOR_CROSSHAIR : (this.tool === 'pan' ? EasyNoteView.CURSOR_GRAB : 'default')));
+            return;
+        }
+        // 平移模式左鍵釋放：還原游標為張開手
+        if (this.tool === 'pan' && e.button === 0 && this.activePointers.size === 0) {
+            this.canvas.style.cursor = EasyNoteView.CURSOR_GRAB;
             return;
         }
         if (this.tool === 'paintselect') {
