@@ -99,15 +99,26 @@ class EasyNoteView extends ItemView implements FeatureAPI {
     // 圖層圈選（select mode rubber-band + multi-select）
     private imgSelStart:   { x: number; y: number } | null = null;
     private imgSelCurrent: { x: number; y: number } | null = null;
-    private multiSel: { imageIdxs: number[]; textIdxs: number[]; mdIdxs: number[] } | null = null;
+    private multiSel: {
+        imageIdxs: number[];
+        textIdxs:  number[];
+        mdIdxs:    number[];
+        rotation:  number;                                            // 累積旋轉角（弧度）
+        baseBBox:  { x: number; y: number; w: number; h: number };   // 旋轉前的 bbox（隨縮放更新）
+    } | null = null;
     private multiSelDrag: {
         handle:     HandleType;
         startMX:    number;
         startMY:    number;
         startBBox:  { x: number; y: number; w: number; h: number };
-        snapImages: { x: number; y: number; w: number; h: number }[];
-        snapTexts:  { x: number; y: number; fontSize: number }[];
-        snapMds:    { x: number; y: number; fontSize: number; width: number }[];
+        snapImages: { x: number; y: number; w: number; h: number; rotation?: number }[];
+        snapTexts:  { x: number; y: number; fontSize: number; rotation?: number }[];
+        snapMds:    { x: number; y: number; fontSize: number; width: number; rotation?: number }[];
+        // 旋轉專用
+        centerX?:      number;
+        centerY?:      number;
+        startAngle?:   number;
+        currentDelta?: number;   // 每幀更新，供 drawMultiSelBox 使用
     } | null = null;
 
     // 工具模式
@@ -1021,21 +1032,43 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             if (this.multiSel) {
                 const mh = this.hitMultiSelHandle(mx, my);
                 if (mh) {
-                    this.pushHistory('縮放群組圖層');
-                    const bbox = this.getMultiSelBBox()!;
-                    this.multiSelDrag = {
-                        handle: mh, startMX: mx, startMY: my, startBBox: { ...bbox },
-                        snapImages: this.multiSel.imageIdxs.map(i => ({ ...this.imageLayers[i] })),
-                        snapTexts:  this.multiSel.textIdxs.map(i => ({ x: this.textLayers[i].x, y: this.textLayers[i].y, fontSize: this.textLayers[i].fontSize })),
-                        snapMds:    this.multiSel.mdIdxs.map(i => ({ x: this.markdownLayers[i].x, y: this.markdownLayers[i].y, fontSize: this.markdownLayers[i].fontSize, width: this.markdownLayers[i].width })),
-                    };
+                    if (mh === 'rotate') {
+                        this.pushHistory('旋轉群組圖層');
+                        // 使用持久化的 baseBBox（不依賴 getMultiSelBBox，避免旋轉後 bbox 畸變）
+                        const pad = 6;
+                        const b   = this.multiSel.baseBBox;
+                        const rot = this.multiSel.rotation;
+                        const bx  = b.x - pad, by = b.y - pad, bw = b.w + pad * 2, bh = b.h + pad * 2;
+                        const [rhx, rhy] = this.rotateHandleWorldPos(bx, by, bw, bh, rot);
+                        void rhx; void rhy; // 只用來確認控點命中，center 從 baseBBox 算
+                        const centerX = bx + bw / 2;
+                        const centerY = by + bh / 2;
+                        this.multiSelDrag = {
+                            handle: 'rotate', startMX: mx, startMY: my,
+                            startBBox: { x: bx, y: by, w: bw, h: bh },
+                            centerX, centerY,
+                            startAngle: Math.atan2(my - centerY, mx - centerX),
+                            snapImages: this.multiSel.imageIdxs.map(i => ({ ...this.imageLayers[i] })),
+                            snapTexts:  this.multiSel.textIdxs.map(i => ({ x: this.textLayers[i].x, y: this.textLayers[i].y, fontSize: this.textLayers[i].fontSize, rotation: this.textLayers[i].rotation || 0 })),
+                            snapMds:    this.multiSel.mdIdxs.map(i => ({ x: this.markdownLayers[i].x, y: this.markdownLayers[i].y, fontSize: this.markdownLayers[i].fontSize, width: this.markdownLayers[i].width, rotation: this.markdownLayers[i].rotation || 0 })),
+                        };
+                    } else {
+                        this.pushHistory('縮放群組圖層');
+                        const bbox2 = this.multiSel.baseBBox;
+                        this.multiSelDrag = {
+                            handle: mh, startMX: mx, startMY: my, startBBox: { ...bbox2 },
+                            snapImages: this.multiSel.imageIdxs.map(i => ({ ...this.imageLayers[i] })),
+                            snapTexts:  this.multiSel.textIdxs.map(i => ({ x: this.textLayers[i].x, y: this.textLayers[i].y, fontSize: this.textLayers[i].fontSize })),
+                            snapMds:    this.multiSel.mdIdxs.map(i => ({ x: this.markdownLayers[i].x, y: this.markdownLayers[i].y, fontSize: this.markdownLayers[i].fontSize, width: this.markdownLayers[i].width })),
+                        };
+                    }
                     return;
                 }
                 if (this.pointInMultiSelBBox(mx, my)) {
                     this.pushHistory('移動群組圖層');
-                    const bbox = this.getMultiSelBBox()!;
+                    const bbox2 = this.multiSel.baseBBox;
                     this.multiSelDrag = {
-                        handle: 'move', startMX: mx, startMY: my, startBBox: { ...bbox },
+                        handle: 'move', startMX: mx, startMY: my, startBBox: { ...bbox2 },
                         snapImages: this.multiSel.imageIdxs.map(i => ({ ...this.imageLayers[i] })),
                         snapTexts:  this.multiSel.textIdxs.map(i => ({ x: this.textLayers[i].x, y: this.textLayers[i].y, fontSize: this.textLayers[i].fontSize })),
                         snapMds:    this.multiSel.mdIdxs.map(i => ({ x: this.markdownLayers[i].x, y: this.markdownLayers[i].y, fontSize: this.markdownLayers[i].fontSize, width: this.markdownLayers[i].width })),
@@ -1297,6 +1330,46 @@ class EasyNoteView extends ItemView implements FeatureAPI {
                         this.markdownLayers[i].y = ds.snapMds[k].y + dy;
                         this.markdownLayers[i]._cachedH = undefined;
                     }
+                } else if (ds.handle === 'rotate') {
+                    // 群組旋轉：以 bbox 中心為軸，旋轉所有圖層
+                    const cx = ds.centerX!;
+                    const cy = ds.centerY!;
+                    const curAngle = Math.atan2(my - cy, mx - cx);
+                    let delta = curAngle - ds.startAngle!;
+                    if (e.shiftKey || this.proportionalScale) {
+                        const snap = Math.PI / 12; // 每次 15°
+                        delta = Math.round(delta / snap) * snap;
+                    }
+                    const cosD = Math.cos(delta), sinD = Math.sin(delta);
+                    for (let k = 0; k < this.multiSel.imageIdxs.length; k++) {
+                        const i  = this.multiSel.imageIdxs[k];
+                        const s  = ds.snapImages[k];
+                        const px = s.x + s.w / 2 - cx;
+                        const py = s.y + s.h / 2 - cy;
+                        this.imageLayers[i].x = (px * cosD - py * sinD) + cx - s.w / 2;
+                        this.imageLayers[i].y = (px * sinD + py * cosD) + cy - s.h / 2;
+                        this.imageLayers[i].rotation = (s.rotation || 0) + delta;
+                    }
+                    for (let k = 0; k < this.multiSel.textIdxs.length; k++) {
+                        const i  = this.multiSel.textIdxs[k];
+                        const s  = ds.snapTexts[k];
+                        const px = s.x - cx;
+                        const py = s.y - cy;
+                        this.textLayers[i].x = px * cosD - py * sinD + cx;
+                        this.textLayers[i].y = px * sinD + py * cosD + cy;
+                        this.textLayers[i].rotation = (s.rotation || 0) + delta;
+                    }
+                    for (let k = 0; k < this.multiSel.mdIdxs.length; k++) {
+                        const i  = this.multiSel.mdIdxs[k];
+                        const s  = ds.snapMds[k];
+                        const px = s.x - cx;
+                        const py = s.y - cy;
+                        this.markdownLayers[i].x = px * cosD - py * sinD + cx;
+                        this.markdownLayers[i].y = px * sinD + py * cosD + cy;
+                        this.markdownLayers[i].rotation = (s.rotation || 0) + delta;
+                        // 旋轉不改變寬度，_cachedH 仍然有效，不需要清除
+                    }
+                    ds.currentDelta = delta;   // 供 drawMultiSelBox 繪製旋轉版選取框
                 } else {
                     // 縮放：以對角為錨點，等比例縮放所有圖層
                     const b = ds.startBBox;
@@ -1314,7 +1387,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
                         anchorX = b.x; anchorY = b.y;
                         newW = Math.max(10, mx - anchorX); newH = Math.max(10, my - anchorY);
                     }
-                    if (e.shiftKey) {
+                    if (e.shiftKey || this.proportionalScale) {
                         const sc = Math.min(newW / b.w, newH / b.h);
                         newW = sc * b.w; newH = sc * b.h;
                     }
@@ -1647,7 +1720,16 @@ class EasyNoteView extends ItemView implements FeatureAPI {
                 }, [] as number[]);
                 const total = imageIdxs.length + textIdxs.length + mdIdxs.length;
                 if (total > 1) {
-                    this.multiSel = { imageIdxs, textIdxs, mdIdxs };
+                    // 計算初始 bbox（此時 rotation=0）
+                    const _bb0 = (() => {
+                        const rs: {x:number;y:number;r:number;b:number}[] = [];
+                        for (const ii of imageIdxs) { const l=this.imageLayers[ii]; rs.push({x:l.x,y:l.y,r:l.x+l.w,b:l.y+l.h}); }
+                        for (const ii of textIdxs)  { const b=this.textBBox(this.textLayers[ii]); rs.push({x:b.x,y:b.y,r:b.x+b.w,b:b.y+b.h}); }
+                        for (const ii of mdIdxs)    { const b=this.mdBBox(this.markdownLayers[ii]); rs.push({x:b.x,y:b.y,r:b.x+b.w,b:b.y+b.h}); }
+                        const x=Math.min(...rs.map(r=>r.x)), y=Math.min(...rs.map(r=>r.y));
+                        return { x, y, w: Math.max(...rs.map(r=>r.r))-x, h: Math.max(...rs.map(r=>r.b))-y };
+                    })();
+                    this.multiSel = { imageIdxs, textIdxs, mdIdxs, rotation: 0, baseBBox: _bb0 };
                     this.selectedIdx = -1; this.selectedTextIdx = -1; this.selectedMdIdx = -1;
                 } else if (imageIdxs.length === 1) {
                     this.selectedIdx = imageIdxs[0];
@@ -1660,6 +1742,42 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             this.multiSelDrag = null;
             this.render();
             return;
+        }
+        // 旋轉/縮放結束：將 delta 寫入 multiSel.rotation，更新 baseBBox
+        if (this.multiSelDrag && this.multiSel) {
+            const ds = this.multiSelDrag;
+            if (ds.handle === 'rotate' && ds.currentDelta !== undefined) {
+                this.multiSel.rotation += ds.currentDelta;
+            } else if (ds.handle !== 'move' && ds.handle !== 'rotate') {
+                // 縮放結束：重新計算 baseBBox（項目已縮放，rotation 不變）
+                const rs: {x:number;y:number;r:number;b:number}[] = [];
+                for (const i of this.multiSel.imageIdxs) { const l=this.imageLayers[i]; rs.push({x:l.x,y:l.y,r:l.x+l.w,b:l.y+l.h}); }
+                for (const i of this.multiSel.textIdxs)  { const b=this.textBBox(this.textLayers[i]); rs.push({x:b.x,y:b.y,r:b.x+b.w,b:b.y+b.h}); }
+                for (const i of this.multiSel.mdIdxs)    { const b=this.mdBBox(this.markdownLayers[i]); rs.push({x:b.x,y:b.y,r:b.x+b.w,b:b.y+b.h}); }
+                if (rs.length > 0) {
+                    const x=Math.min(...rs.map(r=>r.x)), y=Math.min(...rs.map(r=>r.y));
+                    this.multiSel.baseBBox = { x, y, w: Math.max(...rs.map(r=>r.r))-x, h: Math.max(...rs.map(r=>r.b))-y };
+                    this.multiSel.rotation = 0;
+                }
+            } else if (ds.handle === 'move') {
+                // 移動結束：將 baseBBox 平移同樣的量
+                const dx = this.imageLayers[0] !== undefined || true ? (() => {
+                    // 算組内任意一項的移動量（用第一個圖片圖層或文字圖層）
+                    const k0img = this.multiSel!.imageIdxs[0];
+                    const k0txt = this.multiSel!.textIdxs[0];
+                    const k0md  = this.multiSel!.mdIdxs[0];
+                    if (k0img !== undefined) return { dx: this.imageLayers[k0img].x - ds.snapImages[0].x, dy: this.imageLayers[k0img].y - ds.snapImages[0].y };
+                    if (k0txt !== undefined) return { dx: this.textLayers[k0txt].x   - ds.snapTexts[0].x,  dy: this.textLayers[k0txt].y   - ds.snapTexts[0].y  };
+                    if (k0md  !== undefined) return { dx: this.markdownLayers[k0md].x - ds.snapMds[0].x,   dy: this.markdownLayers[k0md].y - ds.snapMds[0].y   };
+                    return { dx: 0, dy: 0 };
+                })() : { dx: 0, dy: 0 };
+                this.multiSel.baseBBox = {
+                    x: this.multiSel.baseBBox.x + dx.dx,
+                    y: this.multiSel.baseBBox.y + dx.dy,
+                    w: this.multiSel.baseBBox.w,
+                    h: this.multiSel.baseBBox.h,
+                };
+            }
         }
         this.multiSelDrag  = null;
         this.drawing       = false;
@@ -2339,53 +2457,115 @@ class EasyNoteView extends ItemView implements FeatureAPI {
     }
 
     private hitMultiSelHandle(mx: number, my: number): HandleType | null {
-        const bbox = this.getMultiSelBBox();
-        if (!bbox) return null;
-        const { x, y, w, h } = bbox;
+        if (!this.multiSel) return null;
+        const { baseBBox: b, rotation: rot } = this.multiSel;
+        const pad = 6;
+        const bx = b.x - pad, by = b.y - pad, bw = b.w + pad * 2, bh = b.h + pad * 2;
+        const cx = bx + bw / 2, cy = by + bh / 2;
+        // 旋轉控點優先
+        const [rhx, rhy] = this.rotateHandleWorldPos(bx, by, bw, bh, rot);
+        if (Math.hypot(mx - rhx, my - rhy) <= HANDLE_SIZE * 2.4) return 'rotate';
+        // 將輸入變換到未旋轉的局部座標來比對角落控點
+        const cosR = Math.cos(-rot), sinR = Math.sin(-rot);
+        const lx = (mx - cx) * cosR - (my - cy) * sinR;
+        const ly = (mx - cx) * sinR + (my - cy) * cosR;
         const hs = HANDLE_SIZE;
-        const corners: [HandleType, number, number][] = [
-            ['nw', x,     y    ],
-            ['ne', x + w, y    ],
-            ['sw', x,     y + h],
-            ['se', x + w, y + h],
+        const localCorners: [HandleType, number, number][] = [
+            ['nw', -bw/2, -bh/2], ['ne', bw/2, -bh/2],
+            ['sw', -bw/2,  bh/2], ['se', bw/2,  bh/2],
         ];
-        for (const [type, cx, cy] of corners) {
-            if (mx >= cx - hs && mx <= cx + hs && my >= cy - hs && my <= cy + hs) return type;
+        for (const [type, lcx, lcy] of localCorners) {
+            if (lx >= lcx - hs && lx <= lcx + hs && ly >= lcy - hs && ly <= lcy + hs) return type;
         }
         return null;
     }
 
     private pointInMultiSelBBox(mx: number, my: number): boolean {
-        const bbox = this.getMultiSelBBox();
-        if (!bbox) return false;
-        return mx >= bbox.x && mx <= bbox.x + bbox.w && my >= bbox.y && my <= bbox.y + bbox.h;
+        if (!this.multiSel) return false;
+        const { baseBBox: b, rotation: rot } = this.multiSel;
+        const pad = 6;
+        const bx = b.x - pad, by = b.y - pad, bw = b.w + pad * 2, bh = b.h + pad * 2;
+        const cx = bx + bw / 2, cy = by + bh / 2;
+        const cosR = Math.cos(-rot), sinR = Math.sin(-rot);
+        const lx = (mx - cx) * cosR - (my - cy) * sinR;
+        const ly = (mx - cx) * sinR + (my - cy) * cosR;
+        return lx >= -bw/2 && lx <= bw/2 && ly >= -bh/2 && ly <= bh/2;
     }
 
     private drawMultiSelBox(): void {
-        const bbox = this.getMultiSelBBox();
-        if (!bbox) return;
-        const { x, y, w, h } = bbox;
-        const pad = 6;
-        const bx = x - pad, by = y - pad, bw = w + pad * 2, bh = h + pad * 2;
+        if (!this.multiSel) return;
+
+        // 旋轉拖曳期間：以原始 bbox 旋轉後的矩形呈現，避免軸對齊 bbox 抖動
+        const isRotating = this.multiSelDrag?.handle === 'rotate' && this.multiSelDrag.currentDelta !== undefined;
+
+        let bx: number, by: number, bw: number, bh: number, rot: number;
+        if (isRotating) {
+            const ds  = this.multiSelDrag!;
+            // startBBox 已包含 pad
+            bx = ds.startBBox.x; by = ds.startBBox.y; bw = ds.startBBox.w; bh = ds.startBBox.h;
+            rot = this.multiSel.rotation + ds.currentDelta!;
+        } else {
+            const b   = this.multiSel.baseBBox;
+            const pad = 6;
+            bx = b.x - pad; by = b.y - pad; bw = b.w + pad * 2; bh = b.h + pad * 2;
+            rot = this.multiSel.rotation;
+        }
+
+        const cx = bx + bw / 2, cy = by + bh / 2;
+        const cosR = Math.cos(rot), sinR = Math.sin(rot);
+
+        // ── 選取框（旋轉矩形）──────────────────────────────────────────────
         this.ctx.save();
+        this.ctx.translate(cx, cy);
+        this.ctx.rotate(rot);
         this.ctx.strokeStyle = '#aa33ff';
         this.ctx.lineWidth   = 1.5;
         this.ctx.setLineDash([6, 3]);
         this.ctx.fillStyle   = 'rgba(170,51,255,0.04)';
-        this.ctx.fillRect(bx, by, bw, bh);
-        this.ctx.strokeRect(bx, by, bw, bh);
+        this.ctx.fillRect(-bw / 2, -bh / 2, bw, bh);
+        this.ctx.strokeRect(-bw / 2, -bh / 2, bw, bh);
         this.ctx.restore();
+
+        // ── 角落縮放控點（旋轉後的世界座標）───────────────────────────────
         const hs = HANDLE_SIZE / 2;
-        for (const [cx, cy] of [[bx, by], [bx + bw, by], [bx, by + bh], [bx + bw, by + bh]] as [number, number][]) {
+        const localCorners: [number, number][] = [
+            [-bw / 2, -bh / 2], [bw / 2, -bh / 2],
+            [-bw / 2,  bh / 2], [bw / 2,  bh / 2],
+        ];
+        for (const [lx, ly] of localCorners) {
+            const wx = cx + lx * cosR - ly * sinR;
+            const wy = cy + lx * sinR + ly * cosR;
             this.ctx.save();
             this.ctx.setLineDash([]);
             this.ctx.fillStyle   = '#ffffff';
             this.ctx.strokeStyle = '#aa33ff';
             this.ctx.lineWidth   = 1.5;
-            this.ctx.fillRect(cx - hs, cy - hs, HANDLE_SIZE, HANDLE_SIZE);
-            this.ctx.strokeRect(cx - hs, cy - hs, HANDLE_SIZE, HANDLE_SIZE);
+            this.ctx.fillRect(wx - hs, wy - hs, HANDLE_SIZE, HANDLE_SIZE);
+            this.ctx.strokeRect(wx - hs, wy - hs, HANDLE_SIZE, HANDLE_SIZE);
             this.ctx.restore();
         }
+
+        // ── 旋轉控點（框頂端中央上方，跟著旋轉）──────────────────────────
+        const [rhx, rhy] = this.rotateHandleWorldPos(bx, by, bw, bh, rot);
+        // 框頂端中央（世界座標）：local (0, -bh/2) 旋轉
+        const topMidX = cx - (-bh / 2) * sinR;   // cx + 0*cosR - (-bh/2)*sinR
+        const topMidY = cy + (-bh / 2) * cosR;   // cy + 0*sinR + (-bh/2)*cosR
+        this.ctx.save();
+        this.ctx.setLineDash([]);
+        this.ctx.beginPath();
+        this.ctx.arc(rhx, rhy, HANDLE_SIZE / 2, 0, Math.PI * 2);
+        this.ctx.fillStyle   = '#ffffff';
+        this.ctx.strokeStyle = '#aa33ff';
+        this.ctx.lineWidth   = 1.5;
+        this.ctx.fill();
+        this.ctx.stroke();
+        this.ctx.beginPath();
+        this.ctx.moveTo(rhx, rhy);
+        this.ctx.lineTo(topMidX, topMidY);
+        this.ctx.strokeStyle = '#aa33ff';
+        this.ctx.lineWidth   = 1;
+        this.ctx.stroke();
+        this.ctx.restore();
     }
 
     private updateCursor(mx: number, my: number): void {
@@ -2393,6 +2573,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         // 多圖層群組控點
         if (this.multiSel) {
             const mh = this.hitMultiSelHandle(mx, my);
+            if (mh === 'rotate') { this.canvas.style.cursor = 'crosshair'; return; }
             if (mh === 'nw' || mh === 'se') { this.canvas.style.cursor = 'nwse-resize'; return; }
             if (mh === 'ne' || mh === 'sw') { this.canvas.style.cursor = 'nesw-resize'; return; }
             if (this.pointInMultiSelBBox(mx, my)) { this.canvas.style.cursor = 'move'; return; }
@@ -3561,6 +3742,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         if (this.tool === 'paintselect') {
             if (this.paintFragment && this.pointInFrag(mx, my)) {
                 // 長按在 fragment 上 → 剪下 / 複製 / 等比例縮放 / 刪除
+                this.paintFragDrag = null;  // 取消可能殘留的拖曳狀態
                 this.showContextMenu(clientX, clientY, [
                     {
                         label: '✂ 剪下',
@@ -3590,68 +3772,108 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         }
 
         if (this.tool === 'select') {
-            // 長按在圖片圖層
-            if (this.selectedIdx >= 0 && this.pointInLayer(mx, my, this.imageLayers[this.selectedIdx])) {
-                this.showContextMenu(clientX, clientY, [
-                    { label: '✂ 剪下',   action: () => this.cutSelection() },
-                    { label: '⎘ 複製',   action: () => this.copySelection() },
-                    {
-                        label: this.proportionalScale ? '⤡ 等比例縮放 ✓' : '⤡ 等比例縮放',
-                        action: () => { this.proportionalScale = !this.proportionalScale; },
-                    },
-                    {
-                        label: '🗑 刪除',
-                        action: () => {
-                            this.pushHistory('刪除圖片圖層');
-                            this.imageLayers.splice(this.selectedIdx, 1);
-                            this.selectedIdx = -1;
-                            this.render(); this.refreshStatus();
+            // ── 圈選群組（multiSel）長按 ────────────────────────────────────
+            if (this.multiSel) {
+                // 若點在縮放控點上，讓使用者拖曳控點，不彈選單
+                if (this.hitMultiSelHandle(mx, my) !== null) return;
+                if (this.pointInMultiSelBBox(mx, my)) {
+                    this.multiSelDrag = null;  // 取消殘留拖曳狀態
+                    this.showContextMenu(clientX, clientY, [
+                        { label: '✂ 剪下',   action: () => this.cutSelection() },
+                        { label: '⎘ 複製',   action: () => this.copySelection() },
+                        {
+                            label: this.proportionalScale ? '⤡ 等比例縮放 ✓' : '⤡ 等比例縮放',
+                            action: () => { this.proportionalScale = !this.proportionalScale; },
                         },
-                    },
-                ]);
-                return;
+                        {
+                            label: '🗑 刪除',
+                            action: () => this.deleteSelection(),
+                        },
+                    ]);
+                    return;
+                }
             }
-            // 長按在文字圖層
-            if (this.selectedTextIdx >= 0 && this.pointInText(mx, my, this.textLayers[this.selectedTextIdx])) {
-                this.showContextMenu(clientX, clientY, [
-                    { label: '✂ 剪下',   action: () => this.cutSelection() },
-                    { label: '⎘ 複製',   action: () => this.copySelection() },
-                    {
-                        label: this.proportionalScale ? '⤡ 等比例縮放 ✓' : '⤡ 等比例縮放',
-                        action: () => { this.proportionalScale = !this.proportionalScale; },
-                    },
-                    {
-                        label: '🗑 刪除',
-                        action: () => {
-                            this.pushHistory('刪除文字圖層');
-                            this.textLayers.splice(this.selectedTextIdx, 1);
-                            this.selectedTextIdx = -1;
-                            this.render(); this.refreshStatus();
+
+            // ── 長按在圖片圖層 ───────────────────────────────────────────────
+            if (this.selectedIdx >= 0) {
+                const lay = this.imageLayers[this.selectedIdx];
+                // 觸控在旋轉/縮放控點上 → 不觸發長按選單（讓使用者拖曳控點）
+                if (this.hitHandle(mx, my, lay) !== null) return;
+                if (this.pointInLayer(mx, my, lay)) {
+                    this.dragState = null;  // 取消殘留拖曳狀態
+                    this.showContextMenu(clientX, clientY, [
+                        { label: '✂ 剪下',   action: () => this.cutSelection() },
+                        { label: '⎘ 複製',   action: () => this.copySelection() },
+                        {
+                            label: this.proportionalScale ? '⤡ 等比例縮放 ✓' : '⤡ 等比例縮放',
+                            action: () => { this.proportionalScale = !this.proportionalScale; },
                         },
-                    },
-                ]);
-                return;
+                        {
+                            label: '🗑 刪除',
+                            action: () => {
+                                this.pushHistory('刪除圖片圖層');
+                                this.imageLayers.splice(this.selectedIdx, 1);
+                                this.selectedIdx = -1;
+                                this.render(); this.refreshStatus();
+                            },
+                        },
+                    ]);
+                    return;
+                }
             }
-            // 長按在 Markdown 圖層
-            if (this.selectedMdIdx >= 0 && this.pointInMd(mx, my, this.markdownLayers[this.selectedMdIdx])) {
-                this.showContextMenu(clientX, clientY, [
-                    { label: '✂ 剪下',   action: () => this.cutSelection() },
-                    { label: '⎘ 複製',   action: () => this.copySelection() },
-                    {
-                        label: this.proportionalScale ? '⤡ 等比例縮放 ✓' : '⤡ 等比例縮放',
-                        action: () => { this.proportionalScale = !this.proportionalScale; },
-                    },
-                    {
-                        label: '🗑 刪除',
-                        action: () => {
-                            this.pushHistory('刪除 Markdown 圖層');
-                            this.markdownLayers.splice(this.selectedMdIdx, 1);
-                            this.selectedMdIdx = -1;
-                            this.render(); this.refreshStatus();
+            // ── 長按在文字圖層 ───────────────────────────────────────────────
+            if (this.selectedTextIdx >= 0) {
+                const tl = this.textLayers[this.selectedTextIdx];
+                // 觸控在控點上 → 不觸發長按選單
+                if (this.hitTextHandle(mx, my, tl) !== null) return;
+                if (this.pointInText(mx, my, tl)) {
+                    this.textDragState = null;
+                    this.showContextMenu(clientX, clientY, [
+                        { label: '✂ 剪下',   action: () => this.cutSelection() },
+                        { label: '⎘ 複製',   action: () => this.copySelection() },
+                        {
+                            label: this.proportionalScale ? '⤡ 等比例縮放 ✓' : '⤡ 等比例縮放',
+                            action: () => { this.proportionalScale = !this.proportionalScale; },
                         },
-                    },
-                ]);
-                return;
+                        {
+                            label: '🗑 刪除',
+                            action: () => {
+                                this.pushHistory('刪除文字圖層');
+                                this.textLayers.splice(this.selectedTextIdx, 1);
+                                this.selectedTextIdx = -1;
+                                this.render(); this.refreshStatus();
+                            },
+                        },
+                    ]);
+                    return;
+                }
+            }
+            // ── 長按在 Markdown 圖層 ─────────────────────────────────────────
+            if (this.selectedMdIdx >= 0) {
+                const ml = this.markdownLayers[this.selectedMdIdx];
+                // 觸控在控點上 → 不觸發長按選單
+                if (this.hitMdHandle(mx, my, ml) !== null) return;
+                if (this.pointInMd(mx, my, ml)) {
+                    this.mdDragState = null;
+                    this.showContextMenu(clientX, clientY, [
+                        { label: '✂ 剪下',   action: () => this.cutSelection() },
+                        { label: '⎘ 複製',   action: () => this.copySelection() },
+                        {
+                            label: this.proportionalScale ? '⤡ 等比例縮放 ✓' : '⤡ 等比例縮放',
+                            action: () => { this.proportionalScale = !this.proportionalScale; },
+                        },
+                        {
+                            label: '🗑 刪除',
+                            action: () => {
+                                this.pushHistory('刪除 Markdown 圖層');
+                                this.markdownLayers.splice(this.selectedMdIdx, 1);
+                                this.selectedMdIdx = -1;
+                                this.render(); this.refreshStatus();
+                            },
+                        },
+                    ]);
+                    return;
+                }
             }
         }
 
