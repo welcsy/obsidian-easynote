@@ -50,18 +50,45 @@ export const DEFAULT_SETTINGS: EasyNoteSettings = {
     language:              'zh',
 };
 
+// ─── 向量筆觸 ─────────────────────────────────────────────────────────────────
+/**
+ * 向量筆觸資料。字段名稱縮短以減小 JSON 大小。
+ * t='s' → 筆刷筆觸；t='r' → 橡皮擦矩形
+ */
+export interface VectorStroke {
+    /** type: 's'=筆刷 'r'=橡皮擦矩形 */
+    t: 's' | 'r';
+    /** 顏色（t='s'，非橡皮擦時） */
+    c?: string;
+    /** 不透明度 0~1 */
+    o?: number;
+    /** 筆刷大小 px */
+    z?: number;
+    /** true = 橡皮擦筆觸 */
+    e?: boolean;
+    /** 點陣列 [[x0,y0],[x1,y1],...] */
+    p?: [number, number][];
+    /** 橡皮擦矩形 [x, y, w, h]（t='r' 時使用） */
+    r?: [number, number, number, number];
+    /** 邊界框 [x1, y1, x2, y2]（世界座標） */
+    b: [number, number, number, number];
+}
+
 // ─── .enote 專案格式 ──────────────────────────────────────────────────────────
 export interface ENoteImageLayer    { src: string; x: number; y: number; w: number; h: number; rotation?: number; strokeName?: string; }
 export interface ENoteTextLayer     { text: string; x: number; y: number; fontSize: number; color: string; linkedNotePath?: string; rotation?: number; }
 export interface ENoteMarkdownLayer { text: string; x: number; y: number; fontSize: number; color: string; width: number; linkedNotePath?: string; rotation?: number; }
 export interface ENote {
-    version:        number;
-    canvasWidth:    number;
-    canvasHeight:   number;
-    paintLayer:     string;            // data:image/png;base64,...
-    imageLayers:    ENoteImageLayer[];
-    markdownLayers: ENoteMarkdownLayer[];
-    textLayers:     ENoteTextLayer[];
+    version:         number;
+    canvasWidth:     number;
+    canvasHeight:    number;
+    /** v2+：向量筆觸陣列（取代 paintLayer） */
+    strokePaths?:    VectorStroke[];
+    /** v1 舊格式：data:image/png;base64 (向後兼容，載入時轉為圖片圖層) */
+    paintLayer?:     string;
+    imageLayers:     ENoteImageLayer[];
+    markdownLayers:  ENoteMarkdownLayer[];
+    textLayers:      ENoteTextLayer[];
 }
 
 export interface ImageLayer {
@@ -167,7 +194,8 @@ export interface MdDragState {
 /** 畫布歷史快照（用於 Undo/Redo） */
 export interface HistoryEntry {
     label:          string;
-    paintData:      ImageData;
+    /** v2+：向量筆觸快照（取代 paintData ImageData） */
+    strokePaths:    VectorStroke[];
     imageLayers:    { img: HTMLImageElement | ImageBitmap; x: number; y: number; w: number; h: number; rotation?: number }[];
     markdownLayers: { text: string; x: number; y: number; fontSize: number; color: string; width: number; linkedNotePath?: string; rotation?: number }[];
     textLayers:     { text: string; x: number; y: number; fontSize: number; color: string; linkedNotePath?: string; rotation?: number }[];

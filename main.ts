@@ -31,7 +31,7 @@ import {
     type ImageLayer, type HandleType, type DragState,
     type TextLayer, type TextDragState,
     type PaintFragment, type InlineSeg, type MarkdownLayer, type MdDragState,
-    type HistoryEntry,
+    type HistoryEntry, type VectorStroke,
 } from './types';
 
 // ─── 字型 ─────────────────────────────────────────────────────────────────────
@@ -176,11 +176,17 @@ class EasyNoteView extends ItemView implements FeatureAPI {
     /** stroke-layer 模式：直接貼 display canvas，完全跳過 rAF 合成管線 */
     private _wetLayerActive = false;
 
-    // stroke-layer 模式：筆觸 dirty rect 追蹤 & 自動命名計數器
+    /** stroke-layer 模式：筆觸 dirty rect 追蹤 & 自動命名計數器 */
     private _strokeDirty:   { x1: number; y1: number; x2: number; y2: number } | null = null;
     private _strokeCounter  = 0;
     // stroke-layer 橡皮擦 pixel hit test 用的共用小 canvas
     private _hitCanvas: HTMLCanvasElement | null = null;
+
+    // ── 向量筆觸 ──────────────────────────────────────────────────────────────
+    /** 所有已完成的向量筆觸（取代 paintCanvas 像素儲存） */
+    private strokePaths: VectorStroke[] = [];
+    /** 正在繪製中的筆觸（指向 stroke，pointerup 時推入 strokePaths） */
+    private _currentStroke: VectorStroke | null = null;
 
     // 自訂游標 dot（固定定位 overlay）
     private _cursorDot: HTMLDivElement | null = null;
@@ -687,11 +693,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             const hasContent = this.imageLayers.length > 0
                 || this.textLayers.length > 0
                 || this.markdownLayers.length > 0
-                || (() => {
-                    const d = this.paintCtx.getImageData(0, 0, 1, 1).data;
-                    // 快速判斷：整個 paintCanvas 是否有任何筆觸（只抽樣中心點，完整判斷耗費資源）
-                    return false;
-                })();
+                || this.strokePaths.length > 0;
             if (hasContent || this.history.length > 0) {
                 const confirmed = confirm(t('confirm.newCanvas'));
                 if (!confirmed) return;
@@ -836,20 +838,8 @@ class EasyNoteView extends ItemView implements FeatureAPI {
     // ── Canvas 大小調整 ───────────────────────────────────────────────────────
 
     private applyCanvasSize(w: number, h: number): void {
-        const PS  = this.paintScale;
-        const pw  = Math.max(1, Math.round(w * PS));
-        const ph  = Math.max(1, Math.round(h * PS));
-        // 備份 paintCanvas（保留原始 PS 尺寸內容）
-        const tmp = document.createElement('canvas');
-        tmp.width  = this.paintCanvas.width  || pw;
-        tmp.height = this.paintCanvas.height || ph;
-        tmp.getContext('2d')!.drawImage(this.paintCanvas, 0, 0);
-
-        this.paintCanvas.width  = pw;
-        this.paintCanvas.height = ph;
-        // 不填白底，讓繪畫層保持透明（舊內容由 tmp 還原）
-        this.paintCtx.drawImage(tmp, 0, 0);
-
+        // 向量模式：paintCanvas 改為 viewport 大小，不再跟畫布尺寸綁定
+        // 只需調整顯示 canvas 尺寸即可
         this.canvas.width  = w;
         this.canvas.height = h;
         this.render();
@@ -944,6 +934,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
                 this._strokeDirty    = null;
                 this._wetLayerActive = false;
                 this._vpCache        = null;
+                this._currentStroke  = null;  // 取消進行中的筆觸
                 this.scheduleRender();
             }
 
@@ -1266,6 +1257,16 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             this.pushHistory(this.eraser ? '橡皮擦' : '筆觸');  // 每次筆觸開始前保存快照
             this.drawing = true;
             this.prevX = mx; this.prevY = my;
+            // 初始化向量筆觸
+            this._currentStroke = {
+                t: 's',
+                c: this.eraser ? '' : this.colors[this.colorIdx],
+                o: this.brushOpacity,
+                z: this.brushSize,
+                e: this.eraser,
+                p: [],
+                b: [Infinity, Infinity, -Infinity, -Infinity],
+            };
             this.initViewportCache();  // 初始化 viewport paint cache
             this.paintDot(mx, my);
         }
@@ -1809,6 +1810,13 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         this.dragState     = null;
         this.textDragState = null;
         this.mdDragState   = null;
+        // 提交向量筆觸
+        if (this._currentStroke && this._currentStroke.p && this._currentStroke.p.length > 0) {
+            const b = this._currentStroke.b;
+            if (!isFinite(b[0])) { b[0] = b[1] = b[2] = b[3] = 0; }
+            this.strokePaths.push(this._currentStroke);
+        }
+        this._currentStroke = null;
         // stroke-layer 模式：筆觸結束，提交為圖片圖層
         if (this.settings.brushMode === 'stroke-layer' && !this.eraser) {
             this.commitStrokeAsLayer();
@@ -1828,6 +1836,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         this.drawing         = false;
         this._vpCache        = null;
         this._wetLayerActive = false;
+        this._currentStroke  = null;
         this.dragState     = null;
         this.textDragState = null;
         this.mdDragState   = null;
@@ -1962,26 +1971,26 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             }
             this.ctx.restore();
         }
-        // 4. 繪畫層（最上方）— 只繪製 viewport 對應的 paintCanvas 區域
-        // 筆觸期間：使用小型 viewport cache 避免上傳 128MB+ 大畫布紋理
-        if (this.drawing && this._vpCache) {
-            this.ctx.drawImage(this._vpCache, this._vpCacheX, this._vpCacheY);
-        } else {
-            // 僅複製 viewport 對應的 paintCanvas 區域，減少紋理上傳量
-            const PS   = this.paintScale;
-            const srcX = Math.max(0, Math.floor(vp.x * PS));
-            const srcY = Math.max(0, Math.floor(vp.y * PS));
-            const srcX2 = Math.min(this.paintCanvas.width,  Math.ceil((vp.x + vp.w) * PS));
-            const srcY2 = Math.min(this.paintCanvas.height, Math.ceil((vp.y + vp.h) * PS));
-            const srcW  = srcX2 - srcX;
-            const srcH  = srcY2 - srcY;
-            if (srcW > 0 && srcH > 0) {
-                this.ctx.drawImage(
-                    this.paintCanvas,
-                    srcX, srcY, srcW, srcH,
-                    srcX / PS, srcY / PS, srcW / PS, srcH / PS,
-                );
+        // 4. 繪畫層（向量筆觸 replay 到 viewport-sized paintCanvas）
+        const vpW = Math.ceil(vp.w), vpH = Math.ceil(vp.h);
+        if (vpW > 0 && vpH > 0) {
+            if (this.paintCanvas.width !== vpW || this.paintCanvas.height !== vpH) {
+                this.paintCanvas.width  = vpW;
+                this.paintCanvas.height = vpH;
+            } else {
+                this.paintCtx.clearRect(0, 0, vpW, vpH);
             }
+            for (const s of this.strokePaths) {
+                if (!this.strokeIntersectsViewport(s, vp)) continue;
+                this.replayStroke(this.paintCtx, s, vp.x, vp.y);
+            }
+            // 橡皮擦中或 wet-layer 未開啟：也 replay 進行中的筆觸
+            if (this._currentStroke && (this.eraser || !this._wetLayerActive)) {
+                if (this.strokeIntersectsViewport(this._currentStroke, vp)) {
+                    this.replayStroke(this.paintCtx, this._currentStroke, vp.x, vp.y);
+                }
+            }
+            this.ctx.drawImage(this.paintCanvas, vp.x, vp.y);
         }
         // 4a. 繪畫選取 fragment（繪畫層上方）
         if (this.paintFragment) {
@@ -2373,23 +2382,20 @@ class EasyNoteView extends ItemView implements FeatureAPI {
 
     commitFragment(): void {
         if (!this.paintFragment) return;
-        this.pushHistory('合併繪畫區塊');                 // 合併繪畫區塊前先存快照
-        const PS  = this.paintScale;
+        this.pushHistory('合併繪畫區塊');
         const f   = this.paintFragment;
         const rot = f.rotation || 0;
-        if (rot !== 0) {
-            const cx = (f.x + f.w / 2) * PS, cy = (f.y + f.h / 2) * PS;
-            this.paintCtx.save();
-            this.paintCtx.translate(cx, cy);
-            this.paintCtx.rotate(rot);
-            this.paintCtx.drawImage(f.offscreen, 0, 0, f.offscreen.width, f.offscreen.height, -f.w * PS / 2, -f.h * PS / 2, f.w * PS, f.h * PS);
-            this.paintCtx.restore();
-        } else {
-            this.paintCtx.drawImage(f.offscreen, 0, 0, f.offscreen.width, f.offscreen.height, f.x * PS, f.y * PS, f.w * PS, f.h * PS);
-        }
+        const tmp = document.createElement('canvas');
+        tmp.width  = f.offscreen.width;
+        tmp.height = f.offscreen.height;
+        tmp.getContext('2d')!.drawImage(f.offscreen, 0, 0);
+        createImageBitmap(tmp).then(bitmap => {
+            this.imageLayers.push({ img: bitmap, x: f.x, y: f.y, w: f.w, h: f.h, rotation: rot });
+            this.render();
+        });
         this.paintFragment    = null;
         this.paintFragDrag    = null;
-        this.proportionalScale = false;   // 離開 fragment 時重設等比例鎖定
+        this.proportionalScale = false;
         this.render();
     }
 
@@ -2952,94 +2958,74 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         });
     }
 
-    /** 在筆觸開始時初始化 viewport 畫布快取，畫筆期間 composite 這個小畫布而非全域大畫布 */
+    /** 筆觸開始時初始化 wet-layer 狀態（向量模式：直接 composite 一次，設定 wet-layer flag） */
     private initViewportCache(): void {
         const sl = this.canvasWrapper.scrollLeft;
         const st = this.canvasWrapper.scrollTop;
         this._vpCacheX = sl / this.zoom;
         this._vpCacheY = st / this.zoom;
-        const vw = Math.ceil(this.canvasWrapper.clientWidth  / this.zoom) + 2;
-        const vh = Math.ceil(this.canvasWrapper.clientHeight / this.zoom) + 2;
-        if (!this._vpCache || this._vpCache.width !== vw || this._vpCache.height !== vh) {
-            this._vpCache = document.createElement('canvas');
-            this._vpCache.width  = vw;
-            this._vpCache.height = vh;
-        }
-        const ctx = this._vpCache.getContext('2d')!;
-        ctx.clearRect(0, 0, vw, vh);
-        const PS = this.paintScale;
-        // 從 paintCanvas（PS 縮放）讀取 viewport 區域，拉伸回畫布座標
-        ctx.drawImage(
-            this.paintCanvas,
-            this._vpCacheX * PS, this._vpCacheY * PS, vw * PS, vh * PS,
-            0, 0, vw, vh,
-        );
-        // stroke-layer 筆觸：預先完整合成 display canvas 作為 wet base，
-        // 之後每筆 delta 直接貼上，完全跳過 rAF 合成管線
-        if (this.settings.brushMode === 'stroke-layer' && !this.eraser) {
-            this.render();
+        this._vpCache  = null;  // 向量模式不使用 vpCache，設 null 讓 render 走正常路徑
+        // 先完整合成一次畫面作為 wet-layer 的底圖，然後後續筆觸直接疊加到 this.ctx
+        this.render();
+        if (!this.eraser) {
+            // 非橡皮擦：啟用 wet-layer（直接貼 display canvas，零延遲）
             this._wetLayerActive = true;
         }
+        // 橡皮擦：不開 wet-layer（destination-out 不能直接畫在 this.ctx，需走 render 路徑）
     }
 
-    /** 將同一筆觸同步寫入 viewport cache（canvas 座標，無 PS 縮放） */
-    private syncStrokeToCache(x1: number, y1: number, x2: number, y2: number): void {
-        if (!this._vpCache) return;
-        const ctx = this._vpCache.getContext('2d')!;
+    // ── 向量筆觸輔助 ─────────────────────────────────────────────────────────
+    private replayStroke(ctx: CanvasRenderingContext2D, s: VectorStroke, ox: number, oy: number): void {
         ctx.save();
-        ctx.translate(-this._vpCacheX, -this._vpCacheY);
-        if (this.eraser) {
+        if (s.t === 'r') {
             ctx.globalCompositeOperation = 'destination-out';
-            ctx.strokeStyle = 'rgba(0,0,0,1)';
+            ctx.fillStyle = 'rgba(0,0,0,1)';
+            ctx.fillRect(s.r![0] - ox, s.r![1] - oy, s.r![2], s.r![3]);
         } else {
-            ctx.globalCompositeOperation = 'source-over';
-            ctx.globalAlpha = this.brushOpacity;
-            ctx.strokeStyle = this.colors[this.colorIdx];
+            if (s.e) {
+                ctx.globalCompositeOperation = 'destination-out';
+                ctx.strokeStyle = 'rgba(0,0,0,1)';
+            } else {
+                ctx.globalCompositeOperation = 'source-over';
+                ctx.globalAlpha = s.o ?? 1;
+                ctx.strokeStyle = s.c ?? '#000000';
+            }
+            ctx.lineWidth = s.z ?? 4;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.beginPath();
+            const pts = s.p!;
+            if (pts.length === 1) {
+                ctx.moveTo(pts[0][0] - ox, pts[0][1] - oy);
+                ctx.lineTo(pts[0][0] - ox, pts[0][1] - oy);
+            } else {
+                ctx.moveTo(pts[0][0] - ox, pts[0][1] - oy);
+                for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0] - ox, pts[i][1] - oy);
+            }
+            ctx.stroke();
         }
-        ctx.lineWidth = this.brushSize;
-        ctx.lineCap   = 'round';
-        ctx.lineJoin  = 'round';
-        ctx.beginPath();
-        ctx.moveTo(x1, y1);
-        ctx.lineTo(x2, y2);
-        ctx.stroke();
         ctx.restore();
     }
 
+    private strokeIntersectsViewport(s: VectorStroke, vp: { x: number; y: number; w: number; h: number }): boolean {
+        const [x1, y1, x2, y2] = s.b;
+        return x2 >= vp.x && x1 <= vp.x + vp.w && y2 >= vp.y && y1 <= vp.y + vp.h;
+    }
+
     private paintDot(x: number, y: number): void {
-        const PS = this.paintScale;
-        this.paintCtx.save();
-        if (this.eraser) {
-            this.paintCtx.globalCompositeOperation = 'destination-out';
-            this.paintCtx.strokeStyle = 'rgba(0,0,0,1)';
-        } else {
-            this.paintCtx.globalCompositeOperation = 'source-over';
-            this.paintCtx.globalAlpha = this.brushOpacity;
-            this.paintCtx.strokeStyle = this.colors[this.colorIdx];
+        // ── 記錄向量點 ──────────────────────────────────────────────────────
+        const r = this.brushSize / 2;
+        if (this._currentStroke) {
+            const s = this._currentStroke;
+            s.p!.push([x, y]);
+            s.b[0] = Math.min(s.b[0], x - r);
+            s.b[1] = Math.min(s.b[1], y - r);
+            s.b[2] = Math.max(s.b[2], x + r);
+            s.b[3] = Math.max(s.b[3], y + r);
         }
-        this.paintCtx.lineWidth  = this.brushSize * PS;
-        this.paintCtx.lineCap    = 'round';
-        this.paintCtx.beginPath();
-        // dot：moveTo 與 lineTo 同點，lineCap=round 會畫出圓點
-        this.paintCtx.moveTo(x * PS, y * PS);
-        this.paintCtx.lineTo(x * PS, y * PS);
-        this.paintCtx.stroke();
-        this.paintCtx.restore();
-        this.syncStrokeToCache(x, y, x, y);
-        // stroke-layer 模式：追蹤 dirty rect
-        if (this.settings.brushMode === 'stroke-layer' && !this.eraser) {
-            const r = this.brushSize / 2;
-            if (!this._strokeDirty) {
-                this._strokeDirty = { x1: x - r, y1: y - r, x2: x + r, y2: y + r };
-            } else {
-                this._strokeDirty.x1 = Math.min(this._strokeDirty.x1, x - r);
-                this._strokeDirty.y1 = Math.min(this._strokeDirty.y1, y - r);
-                this._strokeDirty.x2 = Math.max(this._strokeDirty.x2, x + r);
-                this._strokeDirty.y2 = Math.max(this._strokeDirty.y2, y + r);
-            }
-        }
-        if (this._wetLayerActive) {
-            // wet-layer：直接貼 display canvas，無 rAF 延遲
+        // ── 即時視覺反饋 ────────────────────────────────────────────────────
+        if (this._wetLayerActive && !this.eraser) {
+            // 非橡皮擦：直接貼 display canvas（零延遲）
             this.ctx.save();
             this.ctx.globalCompositeOperation = 'source-over';
             this.ctx.globalAlpha = this.brushOpacity;
@@ -3052,49 +3038,25 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             this.ctx.stroke();
             this.ctx.restore();
         } else {
+            // 橡皮擦或 wet-layer 未就緒：走 rAF render（render 會包含 _currentStroke replay）
             this.scheduleRender();
         }
     }
 
     private paintStroke(x1: number, y1: number, x2: number, y2: number): void {
-        const PS = this.paintScale;
-        this.paintCtx.save();
-        if (this.eraser) {
-            this.paintCtx.globalCompositeOperation = 'destination-out';
-            this.paintCtx.strokeStyle = 'rgba(0,0,0,1)';
-        } else {
-            this.paintCtx.globalCompositeOperation = 'source-over';
-            this.paintCtx.globalAlpha = this.brushOpacity;
-            this.paintCtx.strokeStyle = this.colors[this.colorIdx];
+        // ── 記錄向量點 ──────────────────────────────────────────────────────
+        const r = this.brushSize / 2;
+        if (this._currentStroke) {
+            const s = this._currentStroke;
+            // 只記錄終點（起點已在前一次 dot/stroke 的終點或 paintDot 中記錄）
+            s.p!.push([x2, y2]);
+            s.b[0] = Math.min(s.b[0], Math.min(x1, x2) - r);
+            s.b[1] = Math.min(s.b[1], Math.min(y1, y2) - r);
+            s.b[2] = Math.max(s.b[2], Math.max(x1, x2) + r);
+            s.b[3] = Math.max(s.b[3], Math.max(y1, y2) + r);
         }
-        // lineCap/lineJoin=round 產生圓頭筆觸，單一 path stroke 取代多個 arc fill
-        this.paintCtx.lineWidth  = this.brushSize * PS;
-        this.paintCtx.lineCap    = 'round';
-        this.paintCtx.lineJoin   = 'round';
-        this.paintCtx.beginPath();
-        this.paintCtx.moveTo(x1 * PS, y1 * PS);
-        this.paintCtx.lineTo(x2 * PS, y2 * PS);
-        this.paintCtx.stroke();
-        this.paintCtx.restore();
-        this.syncStrokeToCache(x1, y1, x2, y2);
-        // stroke-layer 模式：追蹤 dirty rect
-        if (this.settings.brushMode === 'stroke-layer' && !this.eraser) {
-            const r = this.brushSize / 2;
-            const minX = Math.min(x1, x2) - r;
-            const minY = Math.min(y1, y2) - r;
-            const maxX = Math.max(x1, x2) + r;
-            const maxY = Math.max(y1, y2) + r;
-            if (!this._strokeDirty) {
-                this._strokeDirty = { x1: minX, y1: minY, x2: maxX, y2: maxY };
-            } else {
-                this._strokeDirty.x1 = Math.min(this._strokeDirty.x1, minX);
-                this._strokeDirty.y1 = Math.min(this._strokeDirty.y1, minY);
-                this._strokeDirty.x2 = Math.max(this._strokeDirty.x2, maxX);
-                this._strokeDirty.y2 = Math.max(this._strokeDirty.y2, maxY);
-            }
-        }
-        if (this._wetLayerActive) {
-            // wet-layer：直接貼 display canvas，無 rAF 延遲
+        // ── 即時視覺反饋 ────────────────────────────────────────────────────
+        if (this._wetLayerActive && !this.eraser) {
             this.ctx.save();
             this.ctx.globalCompositeOperation = 'source-over';
             this.ctx.globalAlpha = this.brushOpacity;
@@ -3112,43 +3074,33 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         }
     }
 
-    /** stroke-layer 模式：將 paintCanvas 上當前筆觸提取為圖片圖層，並清除對應區域 */
+    /** stroke-layer 模式：將最後一筆向量筆觸提取為圖片圖層，並從 strokePaths 移除 */
     private commitStrokeAsLayer(): void {
-        if (!this._strokeDirty) return;
-        const PS = this.paintScale;
-        const cw = this.canvas.width;
-        const ch = this.canvas.height;
-        const d = this._strokeDirty;
+        const stroke = this.strokePaths.pop();
+        if (!stroke || stroke.t !== 's' || !stroke.p || stroke.p.length === 0) {
+            if (stroke) this.strokePaths.push(stroke);  // 非筆觸類型，放回去
+            return;
+        }
+        const [x1, y1, x2, y2] = stroke.b;
+        if (!isFinite(x1)) return;  // 空 bbox，跳過
         const margin = 2;
-        const lx  = Math.max(0, Math.floor(d.x1) - margin);
-        const ly  = Math.max(0, Math.floor(d.y1) - margin);
-        const lx2 = Math.min(cw, Math.ceil(d.x2) + margin);
-        const ly2 = Math.min(ch, Math.ceil(d.y2) + margin);
-        const lw  = lx2 - lx;
-        const lh  = ly2 - ly;
-        if (lw <= 0 || lh <= 0) { this._strokeDirty = null; return; }
+        const lx = Math.floor(x1) - margin;
+        const ly = Math.floor(y1) - margin;
+        const lw = Math.ceil(x2 - x1) + margin * 2;
+        const lh = Math.ceil(y2 - y1) + margin * 2;
+        if (lw <= 0 || lh <= 0) return;
 
-        // 從 paintCanvas 複製到暫存 canvas，再以 createImageBitmap 轉換（不需 PNG 編解碼）
-        // 延遲 clearRect 到 bitmap 就緒後，確保畫面不會閃空
+        // 將筆觸 replay 到與其 bbox 相符的小 canvas
         const tmp = document.createElement('canvas');
         tmp.width  = lw;
         tmp.height = lh;
-        tmp.getContext('2d')!.drawImage(
-            this.paintCanvas,
-            lx * PS, ly * PS, lw * PS, lh * PS,
-            0, 0, lw, lh,
-        );
-
-        // 立刻清除 dirty rect（避免下一筆開始前被汙染），clearRect 延到 bitmap 就緒
-        this._strokeDirty = null;
+        this.replayStroke(tmp.getContext('2d')!, stroke, lx, ly);
 
         // 自動命名：Stroke-001, Stroke-002, …
         this._strokeCounter++;
         const strokeName = `Stroke-${String(this._strokeCounter).padStart(3, '0')}`;
 
         createImageBitmap(tmp).then(bitmap => {
-            // bitmap 就緒後才清除 paintCanvas，確保畫面無閃爍
-            this.paintCtx.clearRect(lx * PS, ly * PS, lw * PS, lh * PS);
             this.imageLayers.push({ img: bitmap, x: lx, y: ly, w: lw, h: lh, strokeName });
             this.selectedIdx     = -1;
             this.selectedTextIdx = -1;
@@ -3160,7 +3112,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
 
     clearCanvas(): void {
         this.pushHistory('清除畫布');                 // 清除前先存快照
-        this.paintCtx.clearRect(0, 0, this.paintCanvas.width, this.paintCanvas.height);
+        this.strokePaths     = [];
         this.imageLayers     = [];
         this.markdownLayers  = [];
         this.textLayers      = [];
@@ -3570,7 +3522,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         this.history.splice(this.historyIdx + 1);
         const entry: HistoryEntry = {
             label,
-            paintData:      this.paintCtx.getImageData(0, 0, this.paintCanvas.width, this.paintCanvas.height),
+            strokePaths:    [...this.strokePaths],  // 淺複製陣列（筆觸物件本身不可變）
             imageLayers:    this.imageLayers.map(l => ({ img: l.img, x: l.x, y: l.y, w: l.w, h: l.h, rotation: l.rotation })),
             markdownLayers: this.markdownLayers.map(ml => ({
                 text: ml.text, x: ml.x, y: ml.y, fontSize: ml.fontSize,
@@ -3590,20 +3542,14 @@ class EasyNoteView extends ItemView implements FeatureAPI {
     }
 
     private restoreHistory(entry: HistoryEntry): void {
-        const PS = this.paintScale;
-        const pw = Math.max(1, Math.round(entry.canvasW * PS));
-        const ph = Math.max(1, Math.round(entry.canvasH * PS));
         // 若畫布尺寸不同需先調整
         if (this.canvas.width !== entry.canvasW || this.canvas.height !== entry.canvasH) {
-            this.canvas.width       = entry.canvasW;
-            this.canvas.height      = entry.canvasH;
-            this.paintCanvas.width  = pw;
-            this.paintCanvas.height = ph;
-            this.manualWidth        = entry.canvasW;
-            this.manualHeight       = entry.canvasH;
+            this.canvas.width  = entry.canvasW;
+            this.canvas.height = entry.canvasH;
+            this.manualWidth   = entry.canvasW;
+            this.manualHeight  = entry.canvasH;
         }
-        this.paintCtx.clearRect(0, 0, this.paintCanvas.width, this.paintCanvas.height);
-        this.paintCtx.putImageData(entry.paintData, 0, 0);
+        this.strokePaths     = [...entry.strokePaths];
         this.imageLayers     = entry.imageLayers.map(l => ({ ...l }));
         this.markdownLayers  = entry.markdownLayers.map(ml => ({ ...ml }));
         this.textLayers      = entry.textLayers.map(tl => ({ ...tl }));
@@ -3942,7 +3888,11 @@ class EasyNoteView extends ItemView implements FeatureAPI {
                     const copy = document.createElement('canvas');
                     copy.width  = r.w;
                     copy.height = r.h;
-                    copy.getContext('2d')!.drawImage(this.paintCanvas, r.x * this.paintScale, r.y * this.paintScale, r.w * this.paintScale, r.h * this.paintScale, 0, 0, r.w, r.h);
+                    const cctx = copy.getContext('2d')!;
+                    for (const s of this.strokePaths) {
+                        if (!this.strokeIntersectsViewport(s, { x: r.x, y: r.y, w: r.w, h: r.h })) continue;
+                        this.replayStroke(cctx, s, r.x, r.y);
+                    }
                     this.clipboard = { type: 'paint', offscreen: copy, w: r.w, h: r.h };
                     new Notice('已複製繪畫選取');
                 }
@@ -3999,14 +3949,14 @@ class EasyNoteView extends ItemView implements FeatureAPI {
                     const copy = document.createElement('canvas');
                     copy.width  = r.w;
                     copy.height = r.h;
-                    copy.getContext('2d')!.drawImage(this.paintCanvas, r.x * this.paintScale, r.y * this.paintScale, r.w * this.paintScale, r.h * this.paintScale, 0, 0, r.w, r.h);
+                    const cctx = copy.getContext('2d')!;
+                    for (const s of this.strokePaths) {
+                        if (!this.strokeIntersectsViewport(s, { x: r.x, y: r.y, w: r.w, h: r.h })) continue;
+                        this.replayStroke(cctx, s, r.x, r.y);
+                    }
                     this.clipboard = { type: 'paint', offscreen: copy, w: r.w, h: r.h };
-                    // 從畫布挖空選取區
-                    this.paintCtx.save();
-                    this.paintCtx.globalCompositeOperation = 'destination-out';
-                    this.paintCtx.fillStyle = 'rgba(0,0,0,1)';
-                    this.paintCtx.fillRect(r.x * this.paintScale, r.y * this.paintScale, r.w * this.paintScale, r.h * this.paintScale);
-                    this.paintCtx.restore();
+                    // 從向量筆觸中挖空選取區（加入 erase-rect 筆觸）
+                    this.strokePaths.push({ t: 'r', r: [r.x, r.y, r.w, r.h], b: [r.x, r.y, r.x + r.w, r.y + r.h] });
                     this.selStart   = null;
                     this.selCurrent = null;
                     this.render();
@@ -4021,11 +3971,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         if (this.clipboard.type === 'paint') {
             // 先把現有浮動區塊合併入畫布（不另外佔一筆歷史）
             if (this.paintFragment) {
-                const f  = this.paintFragment;
-                const PS = this.paintScale;
-                this.paintCtx.drawImage(f.offscreen, 0, 0, f.offscreen.width, f.offscreen.height, f.x * PS, f.y * PS, f.w * PS, f.h * PS);
-                this.paintFragment = null;
-                this.paintFragDrag = null;
+                this.commitFragment();
             }
             this.pushHistory('貼上繪畫');
             const c = this.clipboard;
@@ -4172,7 +4118,6 @@ class EasyNoteView extends ItemView implements FeatureAPI {
                 : `${folder}/${EasyNoteView.AUTOSAVE_FILENAME}`;
             const filepath = normalizePath(filename);
 
-            const paintLayer  = this.paintCanvas.toDataURL('image/png');
             const imageLayers: ENoteImageLayer[] = this.imageLayers.map((lay) => {
                 const tmp  = document.createElement('canvas');
                 tmp.width  = lay.img instanceof ImageBitmap ? lay.img.width  : (lay.img.naturalWidth  || lay.w);
@@ -4181,10 +4126,10 @@ class EasyNoteView extends ItemView implements FeatureAPI {
                 return { src: tmp.toDataURL('image/png'), x: lay.x, y: lay.y, w: lay.w, h: lay.h, rotation: lay.rotation, strokeName: lay.strokeName };
             });
             const project: ENote = {
-                version:        1,
+                version:        2,
                 canvasWidth:    this.canvas.width,
                 canvasHeight:   this.canvas.height,
-                paintLayer,
+                strokePaths:    this.strokePaths,
                 imageLayers,
                 markdownLayers: this.markdownLayers.map(ml => ({
                     text: ml.text, x: ml.x, y: ml.y, fontSize: ml.fontSize,
@@ -4230,9 +4175,6 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             }
             const filename = normalizePath(`${folder}/${baseName}.enote`);
 
-            // 繪畫層 → base64 PNG
-            const paintLayer = this.paintCanvas.toDataURL('image/png');
-
             // 圖片層 → 每張先畫到暫存 canvas 取得 data URL
             const imageLayers: ENoteImageLayer[] = this.imageLayers.map((lay) => {
                 const tmp   = document.createElement('canvas');
@@ -4243,10 +4185,10 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             });
 
             const project: ENote = {
-                version:        1,
+                version:        2,
                 canvasWidth:    this.canvas.width,
                 canvasHeight:   this.canvas.height,
-                paintLayer,
+                strokePaths:    this.strokePaths,
                 imageLayers,
                 markdownLayers: this.markdownLayers.map(ml => ({
                     text: ml.text, x: ml.x, y: ml.y, fontSize: ml.fontSize,
@@ -4291,22 +4233,22 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             // 設定畫布尺寸（直接寫，不復原舊內容）
             this.manualWidth  = project.canvasWidth;
             this.manualHeight = project.canvasHeight;
-            this.canvas.width       = project.canvasWidth;
-            this.canvas.height      = project.canvasHeight;
-            this.paintCanvas.width  = Math.max(1, Math.round(project.canvasWidth  * this.paintScale));
-            this.paintCanvas.height = Math.max(1, Math.round(project.canvasHeight * this.paintScale));
+            this.canvas.width  = project.canvasWidth;
+            this.canvas.height = project.canvasHeight;
 
-            // 載入繪畫層
-            await new Promise<void>((resolve) => {
-                const img = new Image();
-                img.onload = () => {
-                    // 將儲存圖片（全尺寸）縮放至 paintCanvas（PS 尺寸）
-                    this.paintCtx.drawImage(img, 0, 0, this.paintCanvas.width, this.paintCanvas.height);
-                    resolve();
-                };
-                img.onerror = () => resolve();
-                img.src = project.paintLayer;
-            });
+            // 載入向量筆觸（v2）或舊版 paintLayer PNG（v1 → 轉為圖片圖層）
+            this.strokePaths = (project.strokePaths ?? []) as VectorStroke[];
+            if (project.paintLayer && !project.strokePaths) {
+                await new Promise<void>((resolve) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        this.imageLayers.push({ img, x: 0, y: 0, w: project.canvasWidth, h: project.canvasHeight, rotation: 0 });
+                        resolve();
+                    };
+                    img.onerror = () => resolve();
+                    img.src = project.paintLayer!;
+                });
+            }
 
             // 載入圖片層
             for (const lay of project.imageLayers) {
@@ -4791,35 +4733,12 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             lines.push(`---`);
             lines.push(``);
 
-            // ── 插畫層 ──────────────────────────────────────────────────────
-            const paintData = this.paintCtx.getImageData(
-                0, 0, this.paintCanvas.width, this.paintCanvas.height
-            );
-            let hasContent = false;
-            for (let i = 3; i < paintData.data.length; i += 4) {
-                if (paintData.data[i] > 0) { hasContent = true; break; }
-            }
             lines.push(`## 插畫層`);
             lines.push(``);
-            lines.push(`### 顯示部分`);
-            lines.push(``);
-            lines.push(`> 插畫層為整個畫布大小的單一矩形，viewport culling 以下列範圍判斷是否需要繪製。`);
-            lines.push(``);
             lines.push(`| 項目 | 值 |`);
             lines.push(`|------|-----|`);
-            lines.push(`| 左上角 X | 0 |`);
-            lines.push(`| 左上角 Y | 0 |`);
-            lines.push(`| 右下角 X | ${this.canvas.width} |`);
-            lines.push(`| 右下角 Y | ${this.canvas.height} |`);
-            lines.push(``);
-            lines.push(`### 資訊部分`);
-            lines.push(``);
-            lines.push(`| 項目 | 值 |`);
-            lines.push(`|------|-----|`);
-            lines.push(`| 畫布寬度（含縮放） | ${this.paintCanvas.width} px |`);
-            lines.push(`| 畫布高度（含縮放） | ${this.paintCanvas.height} px |`);
-            lines.push(`| 解析度縮放 | ${this.paintScale}（${this.paintScale === 1.0 ? '全解析度' : '效能模式'}）|`);
-            lines.push(`| 有筆畫內容 | ${hasContent ? '是' : '否'} |`);
+            lines.push(`| 向量筆觸數量 | ${this.strokePaths.length} |`);
+            lines.push(`| 有筆畫內容 | ${this.strokePaths.length > 0 ? '是' : '否'} |`);
             lines.push(``);
             lines.push(`---`);
             lines.push(``);
