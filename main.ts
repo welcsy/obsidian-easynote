@@ -24,6 +24,7 @@ import {
     brushSizeToStep, parseWikilinks,
     type WikiSegment,
     GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_OAUTH_PORT, GOOGLE_REDIRECT_URI,
+    DEV_MODE,
 } from './constants';
 import {
     type EasyNoteSettings, DEFAULT_SETTINGS,
@@ -756,12 +757,13 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             new SaveModal(this.app, defaultName, (name, fmt) => this.saveDrawing(name, fmt)).open();
         });
 
-        // 匯出圖層資訊（測試用）
+        // 匯出圖層資訊（測試用，隱藏）
         const exportLayerBtn = canvasActions.createEl('button', {
             cls:   'easynote-btn',
             text:  t('tb.exportLayers'),
             title: t('tb.exportLayers.title'),
         });
+        exportLayerBtn.style.display = DEV_MODE ? '' : 'none';
         exportLayerBtn.addEventListener('click', () => this.exportLayerInfo());
 
         canvasActions.createEl('div', { cls: 'easynote-spacer' });

@@ -1,9 +1,12 @@
 // ─── 常數（對應 EasyNote GDScript 的 COLORS / COLOR_NAMES）──────────────────
-export const VIEW_TYPE        = 'godot-easynote';
+export const VIEW_TYPE        = 'easynote';
 export const TOOLBAR_HEIGHT   = 52;
 export const MIN_BRUSH_SIZE   = 1;
 export const MAX_BRUSH_SIZE   = 60;
 export const HANDLE_SIZE      = 8;   // 選取控點大小（px）
+
+/** 測試模式：true 時顯示除錯用 UI（匯出圖層資訊等） */
+export const DEV_MODE = false;
 
 // ─── Google OAuth2 憑證（build 時由 esbuild define 注入，不在原始碼中明文）───
 // 實際值來自 .env 檔案（已加入 .gitignore），CI 可設同名環境變數
@@ -55,3 +58,4 @@ export const COLORS: string[] = [
     '#C89200',
 ];
 export const COLOR_NAMES: string[] = ['黑色', '紅色', '藍色', '綠色', '橘色'];
+
