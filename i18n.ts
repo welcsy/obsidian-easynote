@@ -13,6 +13,7 @@ export const TRANSLATIONS: Record<string, { zh: string; en: string }> = {
     'tb.group.draw':    { zh: '插畫',   en: 'Drawing' },
     'tb.group.text':    { zh: '文字',   en: 'Text' },
     'tb.group.image':   { zh: '圖片',   en: 'Image' },
+    'tb.group.canvas':  { zh: '畫布',   en: 'Canvas' },
     'tb.label.color':   { zh: '顏色:',  en: 'Color:' },
     'tb.label.fontSize':{ zh: '字體:',  en: 'Font:' },
     'tb.label.brush':   { zh: '筆刷:',  en: 'Brush:' },

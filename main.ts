@@ -381,15 +381,14 @@ class EasyNoteView extends ItemView implements FeatureAPI {
 
     // ── 工具列建構 ────────────────────────────────────────────────────────────
     private buildToolbar(root: HTMLElement): void {
-        const bar  = root.createEl('div', { cls: 'easynote-toolbar' });
-        const row1 = bar.createEl('div',  { cls: 'easynote-toolbar-row' });
-        const row2 = bar.createEl('div',  { cls: 'easynote-toolbar-row' });
+        const bar = root.createEl('div', { cls: 'easynote-toolbar' });
 
-        // ── 插畫 群組 ────────────────────────────────────────────────────────
-        row1.createEl('span', { cls: 'easynote-group-label', text: t('tb.group.draw') });
+        // ── Group 1: 插畫 ─────────────────────────────────────────────────────
+        const drawGroup = bar.createEl('div', { cls: 'easynote-group' });
+        drawGroup.createEl('span', { cls: 'easynote-group-label', text: t('tb.group.draw') });
 
         // 橡皮擦（快捷 E）
-        this.eraserBtn = row1.createEl('button', {
+        this.eraserBtn = drawGroup.createEl('button', {
             cls:   'easynote-btn easynote-btn-icon',
             title: t('tb.eraser.title'),
         });
@@ -397,58 +396,47 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         this.eraserBtn.addEventListener('click', () => this.toggleEraser());
 
         // 繪畫選取工具（快捷 M）
-        this.paintSelectBtn = row1.createEl('button', {
+        this.paintSelectBtn = drawGroup.createEl('button', {
             cls:   'easynote-btn easynote-btn-icon',
             title: t('tb.paintSelect.title'),
         });
         setIcon(this.paintSelectBtn, 'move');
         this.paintSelectBtn.addEventListener('click', () => this.setTool('paintselect'));
 
-        row1.createEl('div', { cls: 'easynote-sep' });
-
-        // 色彩按鈕（單擊選色 / 雙擊開啟顏色選擇器 快捷 1~5）
-        row1.createEl('span', { cls: 'easynote-label', text: t('tb.label.color') });
+        // 畫筆顏色選擇器（快捷 1~5）
         this.colorBtns = [];
         for (let i = 0; i < this.colors.length; i++) {
-            const wrapper = row1.createEl('div', { cls: 'easynote-color-wrapper' });
+            const wrapper = drawGroup.createEl('div', { cls: 'easynote-color-wrapper' });
 
             const btn = wrapper.createEl('div', {
                 cls:   'easynote-color-btn',
                 title: t('tb.color.title', t(`color.${i}`), String(i + 1)),
             });
             (btn as HTMLElement).style.background = this.colors[i];
-            // 單擊 / 單點 → 選色
+
             let colorBtnLongPressTimer: ReturnType<typeof setTimeout> | null = null;
             let colorBtnLongPressFired = false;
             let colorBtnStartX = 0, colorBtnStartY = 0;
 
             const openColorPanel = () => {
-                // 關閉其他已開啟的面板
                 document.querySelectorAll('.easynote-color-panel').forEach(el => el.remove());
-
                 const panel = document.createElement('div');
                 panel.className = 'easynote-color-panel';
-
                 const native = document.createElement('input');
                 native.type  = 'color';
                 native.value = this.colors[i];
                 panel.appendChild(native);
-
-                // 定位到 wrapper 正下方
                 const rect = wrapper.getBoundingClientRect();
                 panel.style.top  = `${rect.bottom + window.scrollY + 4}px`;
                 panel.style.left = `${rect.left   + window.scrollX}px`;
                 document.body.appendChild(panel);
                 native.focus();
-
                 native.addEventListener('input', () => {
                     this.colors[i] = native.value;
                     (btn as HTMLElement).style.background = native.value;
                     if (this.colorIdx === i) this.refreshStatus();
                     this.refreshColorBtns();
                 });
-
-                // 點擊面板外側關閉
                 const close = (ev: MouseEvent) => {
                     if (!panel.contains(ev.target as Node)) {
                         panel.remove();
@@ -460,12 +448,10 @@ class EasyNoteView extends ItemView implements FeatureAPI {
                 );
             };
 
-            btn.addEventListener('click', (e) => {
+            btn.addEventListener('click', () => {
                 if (colorBtnLongPressFired) { colorBtnLongPressFired = false; return; }
                 this.setColor(i);
             });
-
-            // 長按 → 開啟顏色選擇面板（支援 Android 觸控與桌面滑鼠）
             btn.addEventListener('pointerdown', (e) => {
                 colorBtnLongPressFired = false;
                 colorBtnStartX = e.clientX;
@@ -489,28 +475,26 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             };
             btn.addEventListener('pointerup',     cancelColorLongPress);
             btn.addEventListener('pointercancel', cancelColorLongPress);
-
-            // 桌面雙擊仍可開啟（保留習慣）
             btn.addEventListener('dblclick', (e) => { e.stopPropagation(); openColorPanel(); });
 
             this.colorBtns.push(btn);
         }
-        row1.createEl('div', { cls: 'easynote-sep' });
 
-        // ── 文字 群組 ────────────────────────────────────────────────────────
-        row1.createEl('span', { cls: 'easynote-group-label', text: t('tb.group.text') });
+        // ── Group 2: 文字 ─────────────────────────────────────────────────────
+        const textGroup = bar.createEl('div', { cls: 'easynote-group' });
+        textGroup.createEl('span', { cls: 'easynote-group-label', text: t('tb.group.text') });
 
         // 文字工具（快捷 T）
-        this.textBtn = row1.createEl('button', {
+        this.textBtn = textGroup.createEl('button', {
             cls:   'easynote-btn easynote-btn-icon',
             title: t('tb.text.title'),
         });
         setIcon(this.textBtn, 'type');
         this.textBtn.addEventListener('click', () => this.setTool('text'));
 
-        // 字體大小
-        row1.createEl('span', { cls: 'easynote-label', text: t('tb.label.fontSize') });
-        this.fontSizeInput           = row1.createEl('input');
+        // 文字大小
+        textGroup.createEl('span', { cls: 'easynote-label', text: t('tb.label.fontSize') });
+        this.fontSizeInput           = textGroup.createEl('input');
         this.fontSizeInput.type      = 'number';
         this.fontSizeInput.min       = '8';
         this.fontSizeInput.max       = '200';
@@ -521,7 +505,6 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             const v = parseInt(this.fontSizeInput.value);
             if (v >= 8 && v <= 200) {
                 this.textFontSize = v;
-                // 如果有選中的文字圖層，同步更新字體
                 if (this.selectedTextIdx >= 0 && this.selectedTextIdx < this.textLayers.length) {
                     this.textLayers[this.selectedTextIdx].fontSize = v;
                     this.render();
@@ -529,28 +512,25 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             }
         });
 
-        // 文字顏色
-        row1.createEl('span', { cls: 'easynote-label', text: t('tb.label.color') });
-        this.textColorInput          = row1.createEl('input');
+        // 文字顏色選擇器
+        textGroup.createEl('span', { cls: 'easynote-label', text: t('tb.label.color') });
+        this.textColorInput          = textGroup.createEl('input');
         this.textColorInput.type     = 'color';
         this.textColorInput.value    = this.colors[0];
         this.textColorInput.title    = t('tb.textColor.title');
         this.textColorInput.className = 'easynote-text-color-toolbar';
         this.textColorInput.addEventListener('input', () => {
-            // 即時更新已選中的文字圖層顏色
             if (this.selectedTextIdx >= 0 && this.selectedTextIdx < this.textLayers.length) {
                 this.textLayers[this.selectedTextIdx].color = this.textColorInput.value;
                 this.render();
             }
         });
 
-        row1.createEl('div', { cls: 'easynote-sep' });
-
-        // ── 圖片 群組 ────────────────────────────────────────────────────────
-        const imageGroup = row1.createEl('div', { cls: 'easynote-image-group-wrap' });
+        // ── Group 3: 圖片 ─────────────────────────────────────────────────────
+        const imageGroup = bar.createEl('div', { cls: 'easynote-group' });
         imageGroup.createEl('span', { cls: 'easynote-group-label', text: t('tb.group.image') });
 
-        // 選取工具（快捷 S）
+        // 圈選工具（快捷 S）
         this.selectBtn = imageGroup.createEl('button', {
             cls:   'easynote-btn easynote-btn-icon',
             title: t('tb.select.title'),
@@ -586,8 +566,14 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             new VaultImagePickerModal(this.app, (file) => this.loadImageFromVault(file)).open();
         });
 
-        // 載入筆記
-        const loadNoteBtn = imageGroup.createEl('button', {
+        // 目前圖層標示（已隱藏）
+        this.activeLayerLabel = imageGroup.createEl('span', { cls: 'easynote-active-layer' });
+        this.activeLayerLabel.style.display = 'none';
+
+        // ── Group 4: 筆記 ─────────────────────────────────────────────────────
+        const noteGroup = bar.createEl('div', { cls: 'easynote-group' });
+
+        const loadNoteBtn = noteGroup.createEl('button', {
             cls:   'easynote-btn',
             text:  t('tb.loadNote'),
             title: t('tb.loadNote.title'),
@@ -596,14 +582,10 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             new VaultNotePickerModal(this.app, (file) => this.addLinkedMarkdownLayer(file)).open();
         });
 
-        // 目前圕層類型標示（右側，已隱藏）
-        imageGroup.createEl('div', { cls: 'easynote-spacer' });
-        this.activeLayerLabel = imageGroup.createEl('span', { cls: 'easynote-active-layer' });
-        this.activeLayerLabel.style.display = 'none';
+        // ── Group 5: 快捷鍵（上一步 / 下一步） ───────────────────────────────
+        const shortcutGroup = bar.createEl('div', { cls: 'easynote-group' });
 
-        // ── 第二行 ──────────────────────────────────────────────────────────
-        // Undo / Redo 組合按鈕（左側）
-        const undoGroup = row2.createEl('div', { cls: 'easynote-history-group' });
+        const undoGroup = shortcutGroup.createEl('div', { cls: 'easynote-history-group' });
         this.undoBtn = undoGroup.createEl('button', {
             cls:   'easynote-btn easynote-btn-icon',
             title: t('tb.undo.title'),
@@ -617,7 +599,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             this.showHistoryDropdown(undoArrow, 'undo');
         });
 
-        const redoGroup = row2.createEl('div', { cls: 'easynote-history-group' });
+        const redoGroup = shortcutGroup.createEl('div', { cls: 'easynote-history-group' });
         this.redoBtn = redoGroup.createEl('button', {
             cls:   'easynote-btn easynote-btn-icon',
             title: t('tb.redo.title'),
@@ -631,11 +613,11 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             this.showHistoryDropdown(redoArrow, 'redo');
         });
 
-        row2.createEl('div', { cls: 'easynote-sep' });
+        // ── Group 6: 筆刷設定 ────────────────────────────────────────────────
+        const brushGroup = bar.createEl('div', { cls: 'easynote-group' });
 
-        // 筆刷滑桿
-        row2.createEl('span', { cls: 'easynote-label', text: t('tb.label.brush') });
-        this.sizeSlider           = row2.createEl('input');
+        brushGroup.createEl('span', { cls: 'easynote-label', text: t('tb.label.brush') });
+        this.sizeSlider           = brushGroup.createEl('input');
         this.sizeSlider.type      = 'range';
         this.sizeSlider.step      = '1';
         if (this.effectiveSizeMode === 'steps') {
@@ -650,7 +632,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             this.sizeSlider.title = '筆刷大小';
         }
         this.sizeSlider.className = 'easynote-slider';
-        this.sizeValueLabel = row2.createEl('span', { cls: 'easynote-slider-value' });
+        this.sizeValueLabel = brushGroup.createEl('span', { cls: 'easynote-slider-value' });
         this.sizeSlider.addEventListener('input', () => {
             if (this.effectiveSizeMode === 'steps') {
                 this.brushSize = BRUSH_STEPS[parseInt(this.sizeSlider.value) - 1];
@@ -660,26 +642,26 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             this.refreshStatus();
         });
 
-        // 透明度滑桿
-        row2.createEl('span', { cls: 'easynote-label', text: t('tb.label.opacity') });
-        this.opacitySlider           = row2.createEl('input');
+        brushGroup.createEl('span', { cls: 'easynote-label', text: t('tb.label.opacity') });
+        this.opacitySlider           = brushGroup.createEl('input');
         this.opacitySlider.type      = 'range';
         this.opacitySlider.min       = '1';
         this.opacitySlider.max       = '100';
         this.opacitySlider.value     = '100';
         this.opacitySlider.title     = '筆刷透明度（1% 最透明，100% 不透明）';
         this.opacitySlider.className = 'easynote-slider';
-        this.opacityValueLabel = row2.createEl('span', { cls: 'easynote-slider-value' });
+        this.opacityValueLabel = brushGroup.createEl('span', { cls: 'easynote-slider-value' });
         this.opacitySlider.addEventListener('input', () => {
             this.brushOpacity = parseInt(this.opacitySlider.value) / 100;
             this.refreshStatus();
         });
-        row2.createEl('div', { cls: 'easynote-sep' });
 
-        const canvasActions = row2.createEl('div', { cls: 'easynote-canvas-actions-wrap' });
+        // ── Group 7: 畫布 ─────────────────────────────────────────────────────
+        const canvasGroup = bar.createEl('div', { cls: 'easynote-group' });
+        canvasGroup.createEl('span', { cls: 'easynote-group-label', text: t('tb.group.canvas') });
 
         // 平移鎖定工具
-        this.panLockBtn = canvasActions.createEl('button', {
+        this.panLockBtn = canvasGroup.createEl('button', {
             cls:   'easynote-btn easynote-btn-icon',
             title: t('tb.pan.title'),
         });
@@ -687,7 +669,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         this.panLockBtn.addEventListener('click', () => this.setTool('pan'));
 
         // 開啟新畫布
-        const newCanvasBtn = canvasActions.createEl('button', {
+        const newCanvasBtn = canvasGroup.createEl('button', {
             cls:   'easynote-btn',
             text:  t('tb.newCanvas'),
             title: t('tb.newCanvas.title'),
@@ -710,8 +692,8 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             this.refreshStatus();
         });
 
-        // 畫布大小（直立模式下與儲存/載入/匯出同列）
-        const canvasSizeBtn = canvasActions.createEl('button', {
+        // 畫布大小
+        const canvasSizeBtn = canvasGroup.createEl('button', {
             cls:   'easynote-btn',
             text:  t('tb.canvasSize'),
             title: t('tb.canvasSize.title'),
@@ -720,10 +702,12 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             new CanvasSizeModal(this.app, this.manualWidth, this.manualHeight,
                 (w, h) => this.setCanvasSize(w, h)).open();
         });
-        canvasActions.createEl('div', { cls: 'easynote-sep' });
 
-        // 儲存專案 (.enote)
-        const saveProjectBtn = canvasActions.createEl('button', {
+        // ── Group 8: 檔案 ─────────────────────────────────────────────────────
+        const fileGroup = bar.createEl('div', { cls: 'easynote-group' });
+
+        // 儲存畫布 (.enote)
+        const saveProjectBtn = fileGroup.createEl('button', {
             cls:   'easynote-btn',
             text:  t('tb.saveProject'),
             title: t('tb.saveProject.title'),
@@ -734,8 +718,8 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             new ProjectNameModal(this.app, defaultName, (name) => this.saveProject(name)).open();
         });
 
-        // 載入專案 (.enote)
-        const loadProjectBtn = canvasActions.createEl('button', {
+        // 載入畫布 (.enote)
+        const loadProjectBtn = fileGroup.createEl('button', {
             cls:   'easynote-btn',
             text:  t('tb.loadProject'),
             title: t('tb.loadProject.title'),
@@ -744,8 +728,8 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             new VaultProjectPickerModal(this.app, (file) => this.loadProject(file)).open();
         });
 
-        // 儲存檔案
-        const saveBtn = canvasActions.createEl('button', {
+        // 匯出
+        const saveBtn = fileGroup.createEl('button', {
             cls:   'easynote-btn easynote-btn-save',
             text:  t('tb.export'),
             title: t('tb.export.title'),
@@ -757,7 +741,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         });
 
         // 匯出圖層資訊（測試用，隱藏）
-        const exportLayerBtn = canvasActions.createEl('button', {
+        const exportLayerBtn = fileGroup.createEl('button', {
             cls:   'easynote-btn',
             text:  t('tb.exportLayers'),
             title: t('tb.exportLayers.title'),
@@ -765,10 +749,11 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         exportLayerBtn.style.display = DEV_MODE ? '' : 'none';
         exportLayerBtn.addEventListener('click', () => this.exportLayerInfo());
 
-        canvasActions.createEl('div', { cls: 'easynote-spacer' });
+        // ── Group 9: 狀態列 ───────────────────────────────────────────────────
+        const statusGroup = bar.createEl('div', { cls: 'easynote-group easynote-status-group' });
 
         // 定時 auto-sync 開關按鈕（隱藏）
-        this.autoSyncBtn = canvasActions.createEl('button', {
+        this.autoSyncBtn = statusGroup.createEl('button', {
             cls:   'easynote-btn easynote-btn-icon',
             title: t('tb.autoSync.title'),
         });
@@ -786,7 +771,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         });
 
         // 定時 auto-save 開關按鈕（隱藏）
-        this.autoPeriodicSaveBtn = canvasActions.createEl('button', {
+        this.autoPeriodicSaveBtn = statusGroup.createEl('button', {
             cls:   'easynote-btn easynote-btn-icon',
             title: t('tb.autoSave.title'),
         });
@@ -803,7 +788,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             this.refreshStatus();
         });
 
-        this.statusLabel = canvasActions.createEl('span', { cls: 'easynote-status' });
+        this.statusLabel = statusGroup.createEl('span', { cls: 'easynote-status' });
     }
 
     // ── Canvas 建構 ───────────────────────────────────────────────────────────

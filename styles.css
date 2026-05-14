@@ -9,31 +9,36 @@
     padding:        0 !important;
 }
 
-/* 工具列 */
+/* 工具列：動態排版，群組自動換行 */
 .easynote-toolbar {
-    display:          flex;
-    flex-direction:   column;
-    background:       var(--background-secondary);
-    border-bottom:    1px solid var(--background-modifier-border);
-    flex-shrink:      0;
-    box-sizing:       border-box;
+    display:       flex;
+    flex-wrap:     wrap;
+    align-items:   flex-start;
+    gap:           4px;
+    padding:       4px 8px;
+    background:    var(--background-secondary);
+    border-bottom: 1px solid var(--background-modifier-border);
+    flex-shrink:   0;
+    box-sizing:    border-box;
 }
 
-/* 每一行 */
-.easynote-toolbar-row {
-    display:        flex;
-    align-items:    center;
-    gap:            6px;
-    padding:        0 12px;
-    height:         36px;
-    overflow-x:     auto;
-    overflow-y:     hidden;
-    white-space:    nowrap;
-    box-sizing:     border-box;
+/* 工具列群組（一個 flex item，內部不換行） */
+.easynote-group {
+    display:       flex;
+    align-items:   center;
+    gap:           4px;
+    padding:       3px 6px;
+    border:        1px solid var(--background-modifier-border);
+    border-radius: 6px;
+    flex-shrink:   0;
+    height:        34px;
+    box-sizing:    border-box;
 }
 
-.easynote-toolbar-row + .easynote-toolbar-row {
-    border-top: 1px solid var(--background-modifier-border);
+/* 狀態列群組：可延伸填滿剩餘空間 */
+.easynote-group.easynote-status-group {
+    flex:      1;
+    min-width: 160px;
 }
 
 /* 彈性空隙（讓狀態列靠右） */
@@ -645,8 +650,11 @@
         width:  33px;
         height: 33px;
     }
-    .easynote-toolbar-row {
-        height: 44px;
+    .easynote-group {
+        height: auto;
+        min-height: 44px;
+        padding-top:    4px;
+        padding-bottom: 4px;
     }
     /* 捲軸在觸控裝置上放大，更容易看到與操作 */
     .easynote-canvas-wrapper::-webkit-scrollbar {
@@ -655,26 +663,5 @@
     }
     .easynote-canvas-wrapper::-webkit-scrollbar-thumb {
         background: rgba(200, 200, 200, 0.75);
-    }
-}
-
-/* ── Android 直立模式：圖片群組與畫布操作獨立成列 ───────────────────── */
-@media (hover: none) and (pointer: coarse) and (orientation: portrait) {
-    .easynote-toolbar-row {
-        flex-wrap:      wrap;
-        height:         auto;
-        min-height:     44px;
-        padding-top:    4px;
-        padding-bottom: 4px;
-        overflow-x:     hidden;
-    }
-    .easynote-image-group-wrap,
-    .easynote-canvas-actions-wrap {
-        flex-basis:  100%;
-        border-top:  1px solid var(--background-modifier-border);
-        padding-top: 4px;
-    }
-    .easynote-canvas-actions-wrap .easynote-sep:first-of-type {
-        display: none;
     }
 }
