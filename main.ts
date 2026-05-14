@@ -47,6 +47,9 @@ import { CanvasInputHandler }     from './input/input-canvas';
 import { MobileLongPressHandler } from './input/input-mobile';
 import { type FeatureAPI, type Tool } from './input/input-api';
 
+/** 精簡工具列預設 8 個捷徑 */
+const DEFAULT_COMPACT_SHORTCUTS = ['eraser', 'colors', 'undo', 'redo', 'pan', 'saveProject', 'export', 'none'];
+
 // ─── 繪圖面板（ItemView）──────────────────────────────────────────────────────
 class EasyNoteView extends ItemView implements FeatureAPI {
     private settings: EasyNoteSettings;
@@ -385,6 +388,9 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         const bar = root.createEl('div', { cls: 'easynote-toolbar' });
         this._toolbarEl = bar;
 
+        // 精簡模式捷徑元素映射（shortcutId → HTMLElement）
+        const shortcutEls = new Map<string, HTMLElement>();
+
         // ── Group 1: 插畫 ─────────────────────────────────────────────────────
         const drawGroup = bar.createEl('div', { cls: 'easynote-group' });
         drawGroup.createEl('span', { cls: 'easynote-group-label', text: t('tb.group.draw') });
@@ -396,6 +402,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         });
         setIcon(this.eraserBtn, 'eraser');
         this.eraserBtn.addEventListener('click', () => this.toggleEraser());
+        shortcutEls.set('eraser', this.eraserBtn);
 
         // 繪畫選取工具（快捷 M）
         this.paintSelectBtn = drawGroup.createEl('button', {
@@ -404,11 +411,14 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         });
         setIcon(this.paintSelectBtn, 'move');
         this.paintSelectBtn.addEventListener('click', () => this.setTool('paintselect'));
+        shortcutEls.set('paintselect', this.paintSelectBtn);
 
-        // 畫筆顏色選擇器（快捷 1~5）
+        // 畫筆顏色選擇器（快捷 1~5）：包在 colorsWrap 以供精簡模式移動
+        const colorsWrap = drawGroup.createEl('div', { cls: 'easynote-sc-wrap' });
+        shortcutEls.set('colors', colorsWrap);
         this.colorBtns = [];
         for (let i = 0; i < this.colors.length; i++) {
-            const wrapper = drawGroup.createEl('div', { cls: 'easynote-color-wrapper' });
+            const wrapper = colorsWrap.createEl('div', { cls: 'easynote-color-wrapper' });
 
             const btn = wrapper.createEl('div', {
                 cls:   'easynote-color-btn',
@@ -493,10 +503,13 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         });
         setIcon(this.textBtn, 'type');
         this.textBtn.addEventListener('click', () => this.setTool('text'));
+        shortcutEls.set('text', this.textBtn);
 
-        // 文字大小
-        textGroup.createEl('span', { cls: 'easynote-label', text: t('tb.label.fontSize') });
-        this.fontSizeInput           = textGroup.createEl('input');
+        // 文字大小：包在 fontSizeWrap
+        const fontSizeWrap = textGroup.createEl('div', { cls: 'easynote-sc-wrap' });
+        shortcutEls.set('fontSize', fontSizeWrap);
+        fontSizeWrap.createEl('span', { cls: 'easynote-label', text: t('tb.label.fontSize') });
+        this.fontSizeInput           = fontSizeWrap.createEl('input');
         this.fontSizeInput.type      = 'number';
         this.fontSizeInput.min       = '8';
         this.fontSizeInput.max       = '200';
@@ -514,9 +527,11 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             }
         });
 
-        // 文字顏色選擇器
-        textGroup.createEl('span', { cls: 'easynote-label', text: t('tb.label.color') });
-        this.textColorInput          = textGroup.createEl('input');
+        // 文字顏色選擇器：包在 textColorWrap
+        const textColorWrap = textGroup.createEl('div', { cls: 'easynote-sc-wrap' });
+        shortcutEls.set('textColor', textColorWrap);
+        textColorWrap.createEl('span', { cls: 'easynote-label', text: t('tb.label.color') });
+        this.textColorInput          = textColorWrap.createEl('input');
         this.textColorInput.type     = 'color';
         this.textColorInput.value    = this.colors[0];
         this.textColorInput.title    = t('tb.textColor.title');
@@ -539,6 +554,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         });
         setIcon(this.selectBtn, 'move');
         this.selectBtn.addEventListener('click', () => this.setTool('select'));
+        shortcutEls.set('select', this.selectBtn);
 
         // 載入本機圖片
         const loadBtn = imageGroup.createEl('button', {
@@ -547,6 +563,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             title: t('tb.loadLocal.title'),
         });
         loadBtn.addEventListener('click', () => this.fileInput.click());
+        shortcutEls.set('loadLocal', loadBtn);
 
         this.fileInput        = imageGroup.createEl('input');
         this.fileInput.type   = 'file';
@@ -567,6 +584,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         vaultBtn.addEventListener('click', () => {
             new VaultImagePickerModal(this.app, (file) => this.loadImageFromVault(file)).open();
         });
+        shortcutEls.set('loadVault', vaultBtn);
 
         // 目前圖層標示（已隱藏）
         this.activeLayerLabel = imageGroup.createEl('span', { cls: 'easynote-active-layer' });
@@ -583,6 +601,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         loadNoteBtn.addEventListener('click', () => {
             new VaultNotePickerModal(this.app, (file) => this.addLinkedMarkdownLayer(file)).open();
         });
+        shortcutEls.set('loadNote', loadNoteBtn);
 
         // ── Group 5: 快捷鍵（上一步 / 下一步） ───────────────────────────────
         const shortcutGroup = bar.createEl('div', { cls: 'easynote-group' });
@@ -600,6 +619,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             e.stopPropagation();
             this.showHistoryDropdown(undoArrow, 'undo');
         });
+        shortcutEls.set('undo', undoGroup);
 
         const redoGroup = shortcutGroup.createEl('div', { cls: 'easynote-history-group' });
         this.redoBtn = redoGroup.createEl('button', {
@@ -614,12 +634,16 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             e.stopPropagation();
             this.showHistoryDropdown(redoArrow, 'redo');
         });
+        shortcutEls.set('redo', redoGroup);
 
         // ── Group 6: 筆刷設定 ────────────────────────────────────────────────
         const brushGroup = bar.createEl('div', { cls: 'easynote-group' });
 
-        brushGroup.createEl('span', { cls: 'easynote-label', text: t('tb.label.brush') });
-        this.sizeSlider           = brushGroup.createEl('input');
+        // 筆刷大小：包在 brushSizeWrap
+        const brushSizeWrap = brushGroup.createEl('div', { cls: 'easynote-sc-wrap' });
+        shortcutEls.set('brushSize', brushSizeWrap);
+        brushSizeWrap.createEl('span', { cls: 'easynote-label', text: t('tb.label.brush') });
+        this.sizeSlider           = brushSizeWrap.createEl('input');
         this.sizeSlider.type      = 'range';
         this.sizeSlider.step      = '1';
         if (this.effectiveSizeMode === 'steps') {
@@ -634,7 +658,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             this.sizeSlider.title = '筆刷大小';
         }
         this.sizeSlider.className = 'easynote-slider';
-        this.sizeValueLabel = brushGroup.createEl('span', { cls: 'easynote-slider-value' });
+        this.sizeValueLabel = brushSizeWrap.createEl('span', { cls: 'easynote-slider-value' });
         this.sizeSlider.addEventListener('input', () => {
             if (this.effectiveSizeMode === 'steps') {
                 this.brushSize = BRUSH_STEPS[parseInt(this.sizeSlider.value) - 1];
@@ -644,15 +668,18 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             this.refreshStatus();
         });
 
-        brushGroup.createEl('span', { cls: 'easynote-label', text: t('tb.label.opacity') });
-        this.opacitySlider           = brushGroup.createEl('input');
+        // 透明度：包在 brushOpacityWrap
+        const brushOpacityWrap = brushGroup.createEl('div', { cls: 'easynote-sc-wrap' });
+        shortcutEls.set('brushOpacity', brushOpacityWrap);
+        brushOpacityWrap.createEl('span', { cls: 'easynote-label', text: t('tb.label.opacity') });
+        this.opacitySlider           = brushOpacityWrap.createEl('input');
         this.opacitySlider.type      = 'range';
         this.opacitySlider.min       = '1';
         this.opacitySlider.max       = '100';
         this.opacitySlider.value     = '100';
         this.opacitySlider.title     = '筆刷透明度（1% 最透明，100% 不透明）';
         this.opacitySlider.className = 'easynote-slider';
-        this.opacityValueLabel = brushGroup.createEl('span', { cls: 'easynote-slider-value' });
+        this.opacityValueLabel = brushOpacityWrap.createEl('span', { cls: 'easynote-slider-value' });
         this.opacitySlider.addEventListener('input', () => {
             this.brushOpacity = parseInt(this.opacitySlider.value) / 100;
             this.refreshStatus();
@@ -669,6 +696,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         });
         setIcon(this.panLockBtn, 'hand');
         this.panLockBtn.addEventListener('click', () => this.setTool('pan'));
+        shortcutEls.set('pan', this.panLockBtn);
 
         // 開啟新畫布
         const newCanvasBtn = canvasGroup.createEl('button', {
@@ -693,8 +721,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             this.refreshUndoRedo();
             this.refreshStatus();
         });
-
-        // 畫布大小
+        shortcutEls.set('newCanvas', newCanvasBtn);
         const canvasSizeBtn = canvasGroup.createEl('button', {
             cls:   'easynote-btn',
             text:  t('tb.canvasSize'),
@@ -704,6 +731,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             new CanvasSizeModal(this.app, this.manualWidth, this.manualHeight,
                 (w, h) => this.setCanvasSize(w, h)).open();
         });
+        shortcutEls.set('canvasSize', canvasSizeBtn);
 
         // ── Group 8: 檔案 ─────────────────────────────────────────────────────
         const fileGroup = bar.createEl('div', { cls: 'easynote-group' });
@@ -719,6 +747,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             const defaultName = this.lastProjectName || `EasyNote-${ts}`;
             new ProjectNameModal(this.app, defaultName, (name) => this.saveProject(name)).open();
         });
+        shortcutEls.set('saveProject', saveProjectBtn);
 
         // 載入畫布 (.enote)
         const loadProjectBtn = fileGroup.createEl('button', {
@@ -729,6 +758,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         loadProjectBtn.addEventListener('click', () => {
             new VaultProjectPickerModal(this.app, (file) => this.loadProject(file)).open();
         });
+        shortcutEls.set('loadProject', loadProjectBtn);
 
         // 匯出
         const saveBtn = fileGroup.createEl('button', {
@@ -741,6 +771,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             const defaultName = this.lastProjectName || this.lastSaveName || `EasyNote-${ts}`;
             new SaveModal(this.app, defaultName, (name, fmt) => this.saveDrawing(name, fmt)).open();
         });
+        shortcutEls.set('export', saveBtn);
 
         // 匯出圖層資訊（測試用，隱藏）
         const exportLayerBtn = fileGroup.createEl('button', {
@@ -791,6 +822,22 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         });
 
         this.statusLabel = statusGroup.createEl('span', { cls: 'easynote-status' });
+
+        // ── 精簡模式：隱藏所有群組，只顯示選定的捷徑 ────────────────────────
+        if ((this.settings.toolbarLayout ?? 'full') === 'compact') {
+            [drawGroup, textGroup, imageGroup, noteGroup, shortcutGroup, brushGroup, canvasGroup, fileGroup]
+                .forEach(g => { g.style.display = 'none'; });
+            const compactGroup = document.createElement('div');
+            compactGroup.className = 'easynote-group';
+            bar.insertBefore(compactGroup, statusGroup);
+            const slots = this.settings.toolbarShortcuts ?? DEFAULT_COMPACT_SHORTCUTS;
+            for (const id of slots) {
+                if (id === 'none') continue;
+                const el = shortcutEls.get(id);
+                if (el) compactGroup.appendChild(el);
+            }
+        }
+
         this.applyToolbarZoom();
     }
 
@@ -799,6 +846,18 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         const zoom = this.settings.toolbarZoom ?? 1.0;
         if (this._toolbarEl) {
             (this._toolbarEl.style as unknown as Record<string, string>)['zoom'] = zoom === 1.0 ? '' : String(zoom);
+        }
+    }
+
+    /** 重新建構工具列（排列模式或捷徑更動時呼叫） */
+    rebuildToolbar(): void {
+        if (!this._toolbarEl || !this._toolbarEl.parentElement) return;
+        const parent = this._toolbarEl.parentElement as HTMLElement;
+        const refNode = this._toolbarEl.nextSibling;
+        this._toolbarEl.remove();
+        this.buildToolbar(parent);
+        if (refNode && refNode.parentElement === parent) {
+            parent.insertBefore(this._toolbarEl, refNode);
         }
     }
 
@@ -5601,6 +5660,63 @@ class EasyNoteSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 });
             });
+
+        // 工具列排列模式
+        new Setting(containerEl)
+            .setName(t('settings.toolbarLayout'))
+            .setDesc(t('settings.toolbarLayout.desc'))
+            .addDropdown((drop) => {
+                drop.addOption('full',    t('settings.toolbarLayout.full'));
+                drop.addOption('compact', t('settings.toolbarLayout.compact'));
+                drop.setValue(this.plugin.settings.toolbarLayout ?? 'full');
+                drop.onChange(async (value) => {
+                    this.plugin.settings.toolbarLayout = value as 'full' | 'compact';
+                    await this.plugin.saveSettings();
+                    this.app.workspace.getLeavesOfType(VIEW_TYPE).forEach(leaf => {
+                        (leaf.view as EasyNoteView).rebuildToolbar();
+                    });
+                    this.display();
+                });
+            });
+
+        // 精簡模式快捷列設定
+        if ((this.plugin.settings.toolbarLayout ?? 'full') === 'compact') {
+            containerEl.createEl('h3', { text: t('settings.toolbarShortcuts') });
+            containerEl.createEl('p', {
+                cls:  'setting-item-description',
+                text: t('settings.toolbarShortcuts.desc'),
+            });
+            const SHORTCUT_IDS = [
+                'none', 'eraser', 'paintselect', 'colors', 'text', 'fontSize',
+                'textColor', 'select', 'loadLocal', 'loadVault', 'loadNote',
+                'undo', 'redo', 'brushSize', 'brushOpacity', 'pan',
+                'newCanvas', 'canvasSize', 'saveProject', 'loadProject', 'export',
+            ];
+            const slots = [...(this.plugin.settings.toolbarShortcuts ?? DEFAULT_COMPACT_SHORTCUTS)];
+            while (slots.length < 8) slots.push('none');
+            for (let i = 0; i < 8; i++) {
+                new Setting(containerEl)
+                    .setName(`${t('settings.toolbarShortcuts.slot')} ${i + 1}`)
+                    .addDropdown((drop) => {
+                        for (const id of SHORTCUT_IDS) {
+                            drop.addOption(id, t(`settings.shortcut.${id}`));
+                        }
+                        drop.setValue(slots[i] ?? 'none');
+                        drop.onChange(async (value) => {
+                            const current = [
+                                ...(this.plugin.settings.toolbarShortcuts ?? DEFAULT_COMPACT_SHORTCUTS),
+                            ];
+                            while (current.length < 8) current.push('none');
+                            current[i] = value;
+                            this.plugin.settings.toolbarShortcuts = current;
+                            await this.plugin.saveSettings();
+                            this.app.workspace.getLeavesOfType(VIEW_TYPE).forEach(leaf => {
+                                (leaf.view as EasyNoteView).rebuildToolbar();
+                            });
+                        });
+                    });
+            }
+        }
 
         // 工具列縮放比例
         new Setting(containerEl)

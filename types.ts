@@ -27,6 +27,10 @@ export interface EasyNoteSettings {
     language?: 'zh' | 'en';
     // 工具列縮放比例（1.0 = 不縮放）
     toolbarZoom?: number;
+    // 工具列排列模式
+    toolbarLayout?: 'full' | 'compact';
+    // 精簡模式快捷列（最多 8 個捷徑 ID 或 'none'）
+    toolbarShortcuts?: string[];
 }
 export const DEFAULT_SETTINGS: EasyNoteSettings = {
     defaultColorIdx:  0,
@@ -51,6 +55,8 @@ export const DEFAULT_SETTINGS: EasyNoteSettings = {
     googleDriveFolderId:   '',
     language:              'zh',
     toolbarZoom:           1.0,
+    toolbarLayout:         'full',
+    toolbarShortcuts:      ['eraser', 'colors', 'undo', 'redo', 'pan', 'saveProject', 'export', 'none'],
 };
 
 // ─── 向量筆觸 ─────────────────────────────────────────────────────────────────

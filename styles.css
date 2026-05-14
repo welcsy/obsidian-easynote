@@ -41,6 +41,14 @@
     min-width: 160px;
 }
 
+/* 精簡模式複合捷徑包裝器（例如顏色、筆刷大小） */
+.easynote-sc-wrap {
+    display:     flex;
+    align-items: center;
+    gap:         4px;
+    flex-shrink: 0;
+}
+
 /* 彈性空隙（讓狀態列靠右） */
 .easynote-spacer {
     flex: 1;
