@@ -924,6 +924,29 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         if (this.activePointers.size === 2) {
             // 中止任何進行中的繪圖 / 拖曳
             this.gestureActive = false; // 重新開始雙指手勢，清除殘餘旗標
+
+            // 若正在繪畫，取消並清除這次未完成的筆觸
+            if (this.drawing) {
+                if (this.settings.brushMode === 'stroke-layer' && this._strokeDirty) {
+                    // stroke-layer 模式：直接清除 paintCanvas 上的 dirty 區域
+                    const PS = this.paintScale;
+                    const d  = this._strokeDirty;
+                    const margin = 2;
+                    const sx = Math.max(0, Math.floor(d.x1 * PS) - margin);
+                    const sy = Math.max(0, Math.floor(d.y1 * PS) - margin);
+                    const sw = Math.min(this.paintCanvas.width  - sx, Math.ceil((d.x2 - d.x1) * PS) + margin * 2);
+                    const sh = Math.min(this.paintCanvas.height - sy, Math.ceil((d.y2 - d.y1) * PS) + margin * 2);
+                    this.paintCtx.clearRect(sx, sy, sw, sh);
+                } else if (this.settings.brushMode === 'pixel') {
+                    // pixel 模式：筆觸直接寫入 paintCanvas，無法局部撤銷
+                    // 只能保留 — 不做額外清理
+                }
+                this._strokeDirty    = null;
+                this._wetLayerActive = false;
+                this._vpCache        = null;
+                this.scheduleRender();
+            }
+
             this.drawing       = false;
             this.dragState     = null;
             this.textDragState = null;

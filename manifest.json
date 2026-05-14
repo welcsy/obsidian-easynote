@@ -1,7 +1,7 @@
 {
   "id": "easynote",
   "name": "Easy Note",
-  "version": "1.2.4",
+  "version": "1.2.5",
   "minAppVersion": "1.0.0",
   "description": "A full-featured drawing canvas in the Obsidian sidebar. Supports Pixel mode (traditional paint layer) and Image mode (each stroke becomes a selectable layer), multi-color brushes, eraser, image layers with rubber-band multi-select, text layers, Markdown layers ([[wikilink]] and [text](url) links), named undo/redo history, and export to PNG / JPEG / WebP. Canvas state is saved as .enote. Touch and stylus supported.",
   "author": "welcsy",
