@@ -183,7 +183,7 @@ export const translations: Record<string, string> = {
     'settings.paintScale.05':              '0.5× High Performance (large canvas)',
     'settings.paintScale.025':             '0.25× Maximum Performance',
     'settings.timezone':                   'Timezone',
-    'settings.timezone.desc':              'Timezone for file naming (IANA format, e.g. Asia/Taipei, America/New_York, Europe/London)',
+    'settings.timezone.desc':              'Select the timezone used for file naming',
     'settings.autoSync':                   'Periodic Auto-Reload',
     'settings.autoSync.desc':              'When enabled, the canvas reloads at the set interval. Toolbar button also toggles this. No effect without a file name.',
     'settings.autoSyncPeriod':             'Auto-Reload Interval (sec)',

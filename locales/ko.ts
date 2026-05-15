@@ -183,7 +183,7 @@ export const translations: Record<string, string> = {
     'settings.paintScale.05':              '0.5× 고성능 (대형 캔버스 추천)',
     'settings.paintScale.025':             '0.25× 최고 성능',
     'settings.timezone':                   '시간대',
-    'settings.timezone.desc':              '파일 이름에 사용되는 시간대 (IANA 형식, 예: Asia/Seoul, America/New_York)',
+    'settings.timezone.desc':              '파일 저장 시 사용할 시간대 선택',
     'settings.autoSync':                   '정기 자동 새로 고침',
     'settings.autoSync.desc':              '활성화하면 캔버스가 설정된 간격으로 자동 새로 고침됩니다. 파일 이름이 없으면 작동하지 않습니다.',
     'settings.autoSyncPeriod':             '자동 새로 고침 간격 (초)',

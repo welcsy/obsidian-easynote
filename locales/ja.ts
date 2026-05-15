@@ -183,7 +183,8 @@ export const translations: Record<string, string> = {
     'settings.paintScale.05':              '0.5× 高パフォーマンス（大キャンバス推奨）',
     'settings.paintScale.025':             '0.25× 最高パフォーマンス',
     'settings.timezone':                   'タイムゾーン',
-    'settings.timezone.desc':              'ファイル名のタイムゾーン（IANA形式、例: Asia/Tokyo、America/New_York）',
+    'settings.timezone.desc':              'ファイル保存に使用するタイムゾーンを選択',
+
     'settings.autoSync':                   '定期自動再読み込み',
     'settings.autoSync.desc':              '有効にすると、設定した間隔でキャンバスが自動的に再読み込みされます。ファイル名がない場合は動作しません。',
     'settings.autoSyncPeriod':             '自動再読み込み間隔（秒）',

@@ -5738,24 +5738,51 @@ class EasyNoteSettingTab extends PluginSettingTab {
             );
 
         // 時區
+        const TZ_OPTIONS: [string, string][] = [
+            ['Pacific/Honolulu',                 'Pacific/Honolulu (UTC−10)'],
+            ['America/Anchorage',                'America/Anchorage (UTC−9)'],
+            ['America/Los_Angeles',              'America/Los_Angeles (UTC−8)'],
+            ['America/Denver',                   'America/Denver (UTC−7)'],
+            ['America/Chicago',                  'America/Chicago (UTC−6)'],
+            ['America/New_York',                 'America/New_York (UTC−5)'],
+            ['America/Halifax',                  'America/Halifax (UTC−4)'],
+            ['America/Sao_Paulo',                'America/Sao_Paulo (UTC−3)'],
+            ['America/Argentina/Buenos_Aires',   'America/Argentina/Buenos_Aires (UTC−3)'],
+            ['Atlantic/Azores',                  'Atlantic/Azores (UTC−1)'],
+            ['UTC',                              'UTC (UTC+0)'],
+            ['Europe/London',                    'Europe/London (UTC+0/+1)'],
+            ['Europe/Paris',                     'Europe/Paris (UTC+1/+2)'],
+            ['Europe/Berlin',                    'Europe/Berlin (UTC+1/+2)'],
+            ['Europe/Helsinki',                  'Europe/Helsinki (UTC+2/+3)'],
+            ['Europe/Moscow',                    'Europe/Moscow (UTC+3)'],
+            ['Asia/Dubai',                       'Asia/Dubai (UTC+4)'],
+            ['Asia/Karachi',                     'Asia/Karachi (UTC+5)'],
+            ['Asia/Kolkata',                     'Asia/Kolkata (UTC+5:30)'],
+            ['Asia/Dhaka',                       'Asia/Dhaka (UTC+6)'],
+            ['Asia/Bangkok',                     'Asia/Bangkok (UTC+7)'],
+            ['Asia/Shanghai',                    'Asia/Shanghai (UTC+8)'],
+            ['Asia/Hong_Kong',                   'Asia/Hong_Kong (UTC+8)'],
+            ['Asia/Taipei',                      'Asia/Taipei (UTC+8)'],
+            ['Asia/Singapore',                   'Asia/Singapore (UTC+8)'],
+            ['Asia/Seoul',                       'Asia/Seoul (UTC+9)'],
+            ['Asia/Tokyo',                       'Asia/Tokyo (UTC+9)'],
+            ['Australia/Darwin',                 'Australia/Darwin (UTC+9:30)'],
+            ['Australia/Sydney',                 'Australia/Sydney (UTC+10/+11)'],
+            ['Pacific/Auckland',                 'Pacific/Auckland (UTC+12/+13)'],
+        ];
+        const savedTz = this.plugin.settings.timezone ?? 'Asia/Taipei';
+        const tzValue = TZ_OPTIONS.some(([v]) => v === savedTz) ? savedTz : 'Asia/Taipei';
         new Setting(containerEl)
             .setName(t('settings.timezone'))
             .setDesc(t('settings.timezone.desc'))
-            .addText((text) =>
-                text
-                    .setPlaceholder('Asia/Taipei')
-                    .setValue(this.plugin.settings.timezone ?? 'Asia/Taipei')
+            .addDropdown((drop) => {
+                TZ_OPTIONS.forEach(([value, label]) => drop.addOption(value, label));
+                drop.setValue(tzValue)
                     .onChange(async (value) => {
-                        const tz = value.trim();
-                        try {
-                            new Intl.DateTimeFormat('sv-SE', { timeZone: tz });
-                            this.plugin.settings.timezone = tz;
-                            await this.plugin.saveSettings();
-                        } catch {
-                            // 時區字串無效，不更新
-                        }
-                    })
-            );
+                        this.plugin.settings.timezone = value;
+                        await this.plugin.saveSettings();
+                    });
+            });
 
         // 定時 auto-sync / auto-save（隱藏，功能保留）
         const hiddenTimerSettings = containerEl.createDiv();

@@ -183,7 +183,7 @@ export const translations: Record<string, string> = {
     'settings.paintScale.05':              '0.5× 高效能（推薦大畫布）',
     'settings.paintScale.025':             '0.25× 最高效能',
     'settings.timezone':                   '時區',
-    'settings.timezone.desc':              '儲存檔名使用的時區（IANA 格式，例如 Asia/Taipei、America/New_York、Europe/London）',
+    'settings.timezone.desc':              '選擇檔案儲存時使用的時區',
     'settings.autoSync':                   '定時自動重新載入',
     'settings.autoSync.desc':              '開啟後，畫布會依照設定的間隔定時自動重新載入目前畫布檔（工具列按鈕也可即時切換），沒有檔名時不作動',
     'settings.autoSyncPeriod':             '自動重新載入間隔（秒）',
