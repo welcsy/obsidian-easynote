@@ -5724,7 +5724,7 @@ class EasyNoteSettingTab extends PluginSettingTab {
             .setDesc(t('settings.toolbarZoom.desc'))
             .addSlider((slider) =>
                 slider
-                    .setLimits(50, 100, 5)
+                    .setLimits(50, 150, 5)
                     .setValue(Math.round((this.plugin.settings.toolbarZoom ?? 1.0) * 100))
                     .setDynamicTooltip()
                     .onChange(async (value) => {

@@ -187,7 +187,7 @@ export const TRANSLATIONS: Record<string, { zh: string; en: string }> = {
     'settings.shortcut.loadProject':       { zh: '載入畫布', en: 'Load Project' },
     'settings.shortcut.export':            { zh: '匯出', en: 'Export' },
     'settings.toolbarZoom':          { zh: '工具列縮放比例', en: 'Toolbar Zoom' },
-    'settings.toolbarZoom.desc':     { zh: '調整工具列的縮放比例（0.5–1.0）。可用於縮小行動裝置上的工具列尺寸。', en: 'Adjust toolbar zoom level (0.5–1.0). Useful for reducing toolbar size on mobile devices.' },
+    'settings.toolbarZoom.desc':     { zh: '調整工具列的縮放比例（0.5–1.5）。可用於縮小或放大行動裝置上的工具列尺寸。', en: 'Adjust toolbar zoom level (0.5–1.5). Useful for resizing the toolbar on mobile devices.' },
     'settings.paintScale':         { zh: '筆觸解析度', en: 'Stroke Resolution' },
     'settings.paintScale.desc':    { zh: '降低可大幅提升大畫布（8K 等）效能，但筆觸邊緣在縮放後會略微模糊。更改後需重新開啟畫布才生效。', en: 'Lower resolution improves performance on large canvases (8K+), but edges may appear slightly blurred. Reopen canvas to apply.' },
     'settings.paintScale.1':       { zh: '1× 完整解析度（預設）', en: '1× Full Resolution (default)' },
