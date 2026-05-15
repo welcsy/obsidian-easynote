@@ -11,8 +11,11 @@ export interface FontConfig {
 }
 
 const FONT_MAP: Record<Lang, FontConfig> = {
-    zh: zhFontConfig,
-    en: enFontConfig,
+    zh:      zhFontConfig,
+    'zh-cn': zhFontConfig,
+    ja:      zhFontConfig,
+    ko:      zhFontConfig,
+    en:      enFontConfig,
 };
 
 /** 取得指定語系的字型配置 */

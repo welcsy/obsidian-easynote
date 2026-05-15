@@ -5480,11 +5480,14 @@ class EasyNoteSettingTab extends PluginSettingTab {
             .setName(t('settings.language'))
             .setDesc(t('settings.language.desc'))
             .addDropdown((drop) => {
-                drop.addOption('zh', t('settings.language.zh'));
-                drop.addOption('en', t('settings.language.en'));
+                drop.addOption('zh',    t('settings.language.zh'));
+                drop.addOption('zh-cn', t('settings.language.zh-cn'));
+                drop.addOption('ja',    t('settings.language.ja'));
+                drop.addOption('ko',    t('settings.language.ko'));
+                drop.addOption('en',    t('settings.language.en'));
                 drop.setValue(this.plugin.settings.language ?? 'zh');
                 drop.onChange(async (value) => {
-                    this.plugin.settings.language = value as 'zh' | 'en';
+                    this.plugin.settings.language = value as 'zh' | 'zh-cn' | 'ja' | 'ko' | 'en';
                     setLang(value as Lang);
                     await this.plugin.saveSettings();
                     this.display();

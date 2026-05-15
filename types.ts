@@ -24,7 +24,7 @@ export interface EasyNoteSettings {
     googleTokenExpiry:     number;
     googleDriveFolderId:   string;
     // 介面語言
-    language?: 'zh' | 'en';
+    language?: 'zh' | 'zh-cn' | 'ja' | 'ko' | 'en';
     // 工具列縮放比例（1.0 = 不縮放）
     toolbarZoom?: number;
     // 工具列排列模式
