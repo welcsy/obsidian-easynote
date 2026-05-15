@@ -827,14 +827,11 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         if ((this.settings.toolbarLayout ?? 'full') === 'compact') {
             [drawGroup, textGroup, imageGroup, noteGroup, shortcutGroup, brushGroup, canvasGroup, fileGroup]
                 .forEach(g => { g.style.display = 'none'; });
-            const compactGroup = document.createElement('div');
-            compactGroup.className = 'easynote-group';
-            bar.insertBefore(compactGroup, statusGroup);
             const slots = this.settings.toolbarShortcuts ?? DEFAULT_COMPACT_SHORTCUTS;
             for (const id of slots) {
                 if (id === 'none') continue;
                 const el = shortcutEls.get(id);
-                if (el) compactGroup.appendChild(el);
+                if (el) bar.insertBefore(el, statusGroup);
             }
         }
 

@@ -4,6 +4,7 @@
 .easynote-root {
     display:        flex;
     flex-direction: column;
+    width:          100%;   /* 確保 Android 上取得正確容器寬度 */
     height:         100%;
     overflow:       hidden;
     padding:        0 !important;
@@ -19,6 +20,7 @@
     background:    var(--background-secondary);
     border-bottom: 1px solid var(--background-modifier-border);
     flex-shrink:   0;
+    min-width:     0;   /* 作為 flex item 時允許縮小至容器寬度，確保換行正確觸發 */
     box-sizing:    border-box;
 }
 
@@ -350,6 +352,7 @@
 /* 畫布可捲動 wrapper */
 .easynote-canvas-wrapper {
     flex:       1;
+    min-height: 0;   /* 允許在欄式 flex 中縮小，工具列換行後畫布跟著縮 */
     overflow:   auto;
     background: #1e1e1e;
     position:   relative; /* 必須：讓 _scrollSpacer absolute 定位基準 */
