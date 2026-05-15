@@ -1,5 +1,8 @@
 # EasyNote — Obsidian Drawing Plugin
 
+> **Platform compatibility:** Currently tested and supported on **Windows** and **Android** only.
+> macOS, iOS, and Linux have not been verified and may have issues.
+
 A full-featured drawing canvas in the Obsidian sidebar. Supports multi-color brushes, eraser, image layers (including multi-layer rubber-band selection), text layers, Markdown layers (with `[[wikilink]]` and `[text](url)` links), and named undo / redo history. Canvas state is saved in `.enote` format and can be resumed at any time.
 
 ---
