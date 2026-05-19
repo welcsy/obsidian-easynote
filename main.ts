@@ -141,6 +141,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
     // 工具列 DOM
     private _toolbarEl!:       HTMLDivElement;
     private statusLabel!:     HTMLSpanElement;
+    private filenameLabel!:   HTMLSpanElement;
     private eraserBtn!:        HTMLButtonElement;
     private selectBtn!:        HTMLButtonElement;
     private textBtn!:          HTMLButtonElement;
@@ -821,6 +822,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             this.refreshStatus();
         });
 
+        this.filenameLabel = statusGroup.createEl('span', { cls: 'easynote-filename' });
         this.statusLabel = statusGroup.createEl('span', { cls: 'easynote-status' });
 
         // ── 精簡模式：隱藏所有群組，只顯示選定的捷徑 ────────────────────────
@@ -3495,6 +3497,12 @@ class EasyNoteView extends ItemView implements FeatureAPI {
                 this.settings.brushMode === 'stroke-layer' ? 'none' : '';
         }
 
+        // 檔案名稱
+        if (this.filenameLabel) {
+            const name = this.lastProjectName || this.lastSaveName || 'untitled';
+            this.filenameLabel.textContent = `檔名：${name}`;
+        }
+
         // 筆刷 & 透明度 toolbar 數值標籤
         if (this.sizeValueLabel) {
             if (this.effectiveSizeMode === 'steps') {
@@ -4300,6 +4308,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             }
             new Notice(`✓ 專案已儲存: ${filename}`);
             this.lastProjectName = baseName;
+            this.refreshStatus();
         } catch (err) {
             new Notice(`✗ 儲存專案失敗: ${err}`);
             console.error('[EasyNote] saveProject error:', err);
@@ -4370,6 +4379,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             this.lastProjectName = file.basename.replace(/\.enote$/i, '');
             new Notice('EasyNote：專案已載入');
             this.refreshUndoRedo();
+            this.refreshStatus();
         } catch (err) {
             new Notice(`✗ 載入專案失敗: ${err}`);
             console.error('[EasyNote] loadProject error:', err);
@@ -5074,6 +5084,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
 
             await this.app.vault.createBinary(filename, bytes.buffer);
             this.lastSaveName = baseName;
+            this.refreshStatus();
             new Notice(`✓ 已儲存: ${filename}`);
         } catch (err) {
             new Notice(`✗ 儲存失敗: ${err}`);

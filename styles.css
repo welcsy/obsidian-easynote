@@ -340,6 +340,19 @@
     flex-shrink: 0;
 }
 
+/* 檔案名稱 */
+.easynote-filename {
+    font-size:   12px;
+    font-weight: 600;
+    color:       var(--text-normal);
+    white-space: nowrap;
+    flex-shrink: 0;
+    padding-right: 8px;
+    max-width:   200px;
+    overflow:    hidden;
+    text-overflow: ellipsis;
+}
+
 /* 狀態文字 */
 .easynote-status {
     font-size:   12px;
