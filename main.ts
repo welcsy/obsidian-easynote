@@ -349,6 +349,8 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         } else {
             // 新畫布：推入空白起始狀態
             this.pushHistory('初始狀態');
+            // DOM 尚未 layout，用 rAF 等待佈局完成後再 resize + render
+            requestAnimationFrame(() => this.resizeCanvas());
         }
     }
 
@@ -710,7 +712,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
                 || this.textLayers.length > 0
                 || this.markdownLayers.length > 0
                 || this.strokePaths.length > 0;
-            if (hasContent || this.history.length > 0) {
+            if (hasContent || this.historyIdx > 0) {
                 const confirmed = confirm(t('confirm.newCanvas'));
                 if (!confirmed) return;
             }
@@ -919,23 +921,29 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         this.applyZoom();
     }
 
-    /** 將 canvas 元素大小對齊目前 viewport，更新捲軸佔位元素 */
-    private applyZoom(): void {
+    /** 將 canvas 元素大小對齊目前 viewport，更新捲軸佔位元素
+     * @returns true 若 canvas 尺寸實際改變（畫面已被清空，需要重新 render）
+     */
+    private applyZoom(): boolean {
         const vw = Math.max(1, this.canvasWrapper.clientWidth);
         const vh = Math.max(1, this.canvasWrapper.clientHeight);
         // 只有尺寸真的改變時才 reset（改 canvas.width/height 會清除內容）
         if (this.canvas.width !== vw || this.canvas.height !== vh) {
             this.canvas.width  = vw;
             this.canvas.height = vh;
+            this.updateScrollSpacer();
+            return true;  // canvas 被清空，呼叫端必須 render
         }
         this.updateScrollSpacer();
+        return false;
     }
 
     private resizeCanvas(fromWindowResize = false): void {
         if (this.manualWidth > 0 && this.manualHeight > 0) {
             // 視窗縮放事件不重設手動尺寸，但仍需更新 canvas 大小（跟 viewport 同步）
-            this.applyZoom();
-            if (!fromWindowResize) this.render();
+            const cleared = this.applyZoom();
+            // canvas 尺寸改變時內容已被清空（HTML Canvas 規格），無論是否 window resize 都必須重繪
+            if (!fromWindowResize || cleared) this.render();
             return;
         }
         // 無手動尺寸：以 viewport 大小作為邏輯畫布尺寸
