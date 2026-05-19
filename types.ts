@@ -159,6 +159,7 @@ export interface PaintFragment {
     w:  number;                    // 目前寬度（可被縮放）
     h:  number;
     rotation?: number;
+    removedStrokes?: VectorStroke[];  // 圈選時從 strokePaths 移出的筆觸（cancel 時放回）
 }
 
 /** 行內 Markdown 片段（用於 MarkdownLayer 渲染） */

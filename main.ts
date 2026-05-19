@@ -2464,23 +2464,25 @@ class EasyNoteView extends ItemView implements FeatureAPI {
     }
 
     private extractFragment(r: { x: number; y: number; w: number; h: number }): void {
-        const PS             = this.paintScale;
-        const offscreen      = document.createElement('canvas');
-        offscreen.width      = r.w;
-        offscreen.height     = r.h;
-        // paintCanvas 儲存於 PS 縮放尺寸，讀取時需乘以 PS
-        offscreen.getContext('2d')!.drawImage(
-            this.paintCanvas,
-            r.x * PS, r.y * PS, r.w * PS, r.h * PS,
-            0, 0, r.w, r.h,
-        );
-        // 從 paintCanvas 挖除選取區
-        this.paintCtx.save();
-        this.paintCtx.globalCompositeOperation = 'destination-out';
-        this.paintCtx.fillStyle = 'rgba(0,0,0,1)';
-        this.paintCtx.fillRect(r.x * PS, r.y * PS, r.w * PS, r.h * PS);
-        this.paintCtx.restore();
-        this.paintFragment = { offscreen, x: r.x, y: r.y, w: r.w, h: r.h };
+        const snapCanvas = document.createElement('canvas');
+        snapCanvas.width  = r.w;
+        snapCanvas.height = r.h;
+        const snapCtx = snapCanvas.getContext('2d')!;
+        // Replay 所有與選取框相交的筆觸到 snapCanvas（座標偏移 r.x, r.y）
+        for (const s of this.strokePaths) {
+            if (!this.strokeIntersectsViewport(s, r)) continue;
+            this.replayStroke(snapCtx, s, r.x, r.y);
+        }
+
+        // 從 strokePaths 移除落在選取框範圍內的筆觸
+        const removed: VectorStroke[] = [];
+        this.strokePaths = this.strokePaths.filter(s => {
+            if (!this.strokeIntersectsViewport(s, r)) return true;  // 完全在框外：保留
+            removed.push(s);
+            return false;  // 與框相交：移出
+        });
+
+        this.paintFragment = { offscreen: snapCanvas, x: r.x, y: r.y, w: r.w, h: r.h, removedStrokes: removed };
         this.render();
     }
 
@@ -2493,8 +2495,11 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         tmp.width  = f.offscreen.width;
         tmp.height = f.offscreen.height;
         tmp.getContext('2d')!.drawImage(f.offscreen, 0, 0);
+        // 自動命名，確保橡皮擦（stroke-layer 模式）可以識別並刪除此圖層
+        this._strokeCounter++;
+        const strokeName = `Stroke-${String(this._strokeCounter).padStart(3, '0')}`;
         createImageBitmap(tmp).then(bitmap => {
-            this.imageLayers.push({ img: bitmap, x: f.x, y: f.y, w: f.w, h: f.h, rotation: rot });
+            this.imageLayers.push({ img: bitmap, x: f.x, y: f.y, w: f.w, h: f.h, rotation: rot, strokeName });
             this.render();
         });
         this.paintFragment    = null;
@@ -2504,8 +2509,13 @@ class EasyNoteView extends ItemView implements FeatureAPI {
     }
 
     cancelFragment(): void {
-        // 將 fragment 放回目前位置（不保留浮動狀態）
-        this.commitFragment();
+        // 取消圈選：將移出的向量筆觸放回 strokePaths，捨棄 fragment
+        if (this.paintFragment?.removedStrokes?.length) {
+            this.strokePaths.push(...this.paintFragment.removedStrokes);
+        }
+        this.paintFragment = null;
+        this.paintFragDrag = null;
+        this.render();
     }
 
     private hitFragHandle(mx: number, my: number): HandleType | null {
