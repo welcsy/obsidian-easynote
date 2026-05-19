@@ -4318,6 +4318,16 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             new Notice(`✓ 專案已儲存: ${filename}`);
             this.lastProjectName = baseName;
             this.refreshStatus();
+            // 儲存後同步上傳到 Google Drive
+            if (this.settings.googleDriveEnabled && this.driveUpload) {
+                try {
+                    await this.driveUpload(`${baseName}.enote`, bytes);
+                    new Notice('✓ 已同步至 Google Drive', 2000);
+                } catch (driveErr) {
+                    console.error('[EasyNote] Drive upload error:', driveErr);
+                    new Notice('✗ Google Drive 上傳失敗', 2000);
+                }
+            }
         } catch (err) {
             new Notice(`✗ 儲存專案失敗: ${err}`);
             console.error('[EasyNote] saveProject error:', err);
@@ -4326,6 +4336,19 @@ class EasyNoteView extends ItemView implements FeatureAPI {
 
     async loadProject(file: TFile): Promise<void> {
         try {
+            // 載入前先從 Google Drive 同步最新版本到本地
+            if (this.settings.googleDriveEnabled && this.driveDownload) {
+                try {
+                    const content = await this.driveDownload(file.name);
+                    if (content) {
+                        await this.app.vault.modifyBinary(file, content.buffer as ArrayBuffer);
+                        new Notice('✓ 已從 Google Drive 同步', 2000);
+                    }
+                } catch (driveErr) {
+                    console.error('[EasyNote] Drive download error:', driveErr);
+                    new Notice('✗ Google Drive 下載失敗，載入本地版本', 2000);
+                }
+            }
             const raw     = await this.app.vault.readBinary(file);
             const json    = new TextDecoder().decode(raw);
             const project = JSON.parse(json) as ENote;
