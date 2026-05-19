@@ -3980,7 +3980,27 @@ class EasyNoteView extends ItemView implements FeatureAPI {
     // ── 複製 / 剪下 / 貼上（內部剪貼簿）─────────────────────────────────────
     copySelection(): void {
         if (this.tool === 'select') {
-            if (this.selectedIdx >= 0 && this.selectedIdx < this.imageLayers.length) {
+            if (this.multiSel && this.multiSel.imageIdxs.length > 0) {
+                // 多圖層圈選：合成為一個 canvas 存入剪貼簿
+                const bb   = this.multiSel.baseBBox;
+                const copy = document.createElement('canvas');
+                copy.width  = Math.max(1, Math.ceil(bb.w));
+                copy.height = Math.max(1, Math.ceil(bb.h));
+                const cctx = copy.getContext('2d')!;
+                for (const idx of this.multiSel.imageIdxs) {
+                    const l   = this.imageLayers[idx];
+                    const rot = l.rotation || 0;
+                    const cx  = l.x + l.w / 2 - bb.x;
+                    const cy  = l.y + l.h / 2 - bb.y;
+                    cctx.save();
+                    cctx.translate(cx, cy);
+                    cctx.rotate(rot);
+                    cctx.drawImage(l.img as CanvasImageSource, -l.w / 2, -l.h / 2, l.w, l.h);
+                    cctx.restore();
+                }
+                this.clipboard = { type: 'paint', offscreen: copy, w: bb.w, h: bb.h };
+                new Notice(`已複製 ${this.multiSel.imageIdxs.length} 個圖層`);
+            } else if (this.selectedIdx >= 0 && this.selectedIdx < this.imageLayers.length) {
                 const l = this.imageLayers[this.selectedIdx];
                 this.clipboard = { type: 'image', img: l.img, w: l.w, h: l.h };
                 new Notice('已複製圖片圖層');
@@ -3991,6 +4011,8 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             } else if (this.selectedTextIdx >= 0 && this.selectedTextIdx < this.textLayers.length) {
                 this.clipboard = { type: 'text', layer: { ...this.textLayers[this.selectedTextIdx] } };
                 new Notice('已複製文字圖層');
+            } else {
+                new Notice('請先選取要複製的圖層');
             }
         } else if (this.tool === 'paintselect') {
             if (this.paintFragment) {
@@ -4014,6 +4036,8 @@ class EasyNoteView extends ItemView implements FeatureAPI {
                     }
                     this.clipboard = { type: 'paint', offscreen: copy, w: r.w, h: r.h };
                     new Notice('已複製繪畫選取');
+                } else {
+                    new Notice('請先圈選要複製的繪畫區域');
                 }
             }
         }
