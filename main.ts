@@ -3471,6 +3471,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             this.textBtn.removeClass('active');
             this.eraserBtn.removeClass('active');
         }
+        this.refreshColorBtns();
         this.refreshStatus();
     }
 
