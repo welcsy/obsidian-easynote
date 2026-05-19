@@ -34,7 +34,7 @@ export interface EasyNoteSettings {
 }
 export const DEFAULT_SETTINGS: EasyNoteSettings = {
     defaultColorIdx:  0,
-    defaultBrushSize: 6,
+    defaultBrushSize: 2,
     saveFolder:       'EasyNote',
     defaultColors:    [...COLORS],
     brushMode:        'stroke-layer',

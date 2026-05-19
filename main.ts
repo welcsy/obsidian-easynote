@@ -130,7 +130,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
     private drawing     = false;
     private prevX       = 0;
     private prevY       = 0;
-    private brushSize   = 6;
+    private brushSize   = 2;
     private brushOpacity = 1.0;  // 0.01 ~ 1.0
     private colorIdx    = 0;
     private eraser      = false;
