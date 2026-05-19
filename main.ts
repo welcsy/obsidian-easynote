@@ -4227,8 +4227,8 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             });
             const project: ENote = {
                 version:        2,
-                canvasWidth:    this.manualWidth,
-                canvasHeight:   this.manualHeight,
+                canvasWidth:    (this.manualWidth  > 0) ? this.manualWidth  : (this.settings.defaultCanvasWidth  ?? 1920),
+                canvasHeight:   (this.manualHeight > 0) ? this.manualHeight : (this.settings.defaultCanvasHeight ?? 1080),
                 strokePaths:    this.strokePaths,
                 imageLayers,
                 markdownLayers: this.markdownLayers.map(ml => ({
@@ -4286,8 +4286,8 @@ class EasyNoteView extends ItemView implements FeatureAPI {
 
             const project: ENote = {
                 version:        2,
-                canvasWidth:    this.manualWidth,
-                canvasHeight:   this.manualHeight,
+                canvasWidth:    (this.manualWidth  > 0) ? this.manualWidth  : (this.settings.defaultCanvasWidth  ?? 1920),
+                canvasHeight:   (this.manualHeight > 0) ? this.manualHeight : (this.settings.defaultCanvasHeight ?? 1080),
                 strokePaths:    this.strokePaths,
                 imageLayers,
                 markdownLayers: this.markdownLayers.map(ml => ({
@@ -4332,8 +4332,9 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             this.paintFragment   = null;
 
             // 設定畫布尺寸（viewport-canvas 模式：只更新邏輯尺寸）
-            this.manualWidth  = project.canvasWidth;
-            this.manualHeight = project.canvasHeight;
+            // v1 舊檔可能不含 canvasWidth/canvasHeight，以設定預設值補足
+            this.manualWidth  = (project.canvasWidth  > 0) ? project.canvasWidth  : (this.settings.defaultCanvasWidth  ?? 1920);
+            this.manualHeight = (project.canvasHeight > 0) ? project.canvasHeight : (this.settings.defaultCanvasHeight ?? 1080);
 
             // 載入向量筆觸（v2）或舊版 paintLayer PNG（v1 → 轉為圖片圖層）
             this.strokePaths = (project.strokePaths ?? []) as VectorStroke[];
