@@ -1139,6 +1139,66 @@ class EasyNoteView extends ItemView implements FeatureAPI {
                 this.selCurrent = { x: mx, y: my };
             }
         } else if (this.tool === 'select') {
+            // ── Ctrl / ⌘ + 點擊 → 切換圖層加入 / 移出多選群組 ────────────────
+            if (e.ctrlKey || e.metaKey) {
+                // 找被點擊的最上層圖層（image > text > md，從頂層往下找）
+                let ctrlHitImg  = -1;
+                let ctrlHitText = -1;
+                let ctrlHitMd   = -1;
+                for (let i = this.imageLayers.length - 1; i >= 0; i--) {
+                    if (this.pointInLayer(mx, my, this.imageLayers[i])) { ctrlHitImg = i; break; }
+                }
+                if (ctrlHitImg < 0) {
+                    for (let i = this.textLayers.length - 1; i >= 0; i--) {
+                        if (this.pointInText(mx, my, this.textLayers[i])) { ctrlHitText = i; break; }
+                    }
+                }
+                if (ctrlHitImg < 0 && ctrlHitText < 0) {
+                    for (let i = this.markdownLayers.length - 1; i >= 0; i--) {
+                        if (this.pointInMd(mx, my, this.markdownLayers[i])) { ctrlHitMd = i; break; }
+                    }
+                }
+                if (ctrlHitImg >= 0 || ctrlHitText >= 0 || ctrlHitMd >= 0) {
+                    // 以目前選取狀態（單選或 multiSel）為初始集合
+                    const imgSet  = new Set<number>(this.multiSel?.imageIdxs  ?? (this.selectedIdx     >= 0 ? [this.selectedIdx]     : []));
+                    const textSet = new Set<number>(this.multiSel?.textIdxs   ?? (this.selectedTextIdx >= 0 ? [this.selectedTextIdx] : []));
+                    const mdSet   = new Set<number>(this.multiSel?.mdIdxs     ?? (this.selectedMdIdx   >= 0 ? [this.selectedMdIdx]   : []));
+                    // toggle 被點擊的圖層
+                    if (ctrlHitImg  >= 0) { if (imgSet.has(ctrlHitImg))    imgSet.delete(ctrlHitImg);    else imgSet.add(ctrlHitImg); }
+                    if (ctrlHitText >= 0) { if (textSet.has(ctrlHitText))  textSet.delete(ctrlHitText);  else textSet.add(ctrlHitText); }
+                    if (ctrlHitMd   >= 0) { if (mdSet.has(ctrlHitMd))      mdSet.delete(ctrlHitMd);      else mdSet.add(ctrlHitMd); }
+                    const imageIdxs = [...imgSet];
+                    const textIdxs  = [...textSet];
+                    const mdIdxs    = [...mdSet];
+                    const total     = imageIdxs.length + textIdxs.length + mdIdxs.length;
+                    if (total > 1) {
+                        // 重新計算包圍框
+                        const rs: { x: number; y: number; r: number; b: number }[] = [];
+                        for (const ii of imageIdxs) { const l = this.imageLayers[ii]; rs.push({ x: l.x, y: l.y, r: l.x + l.w, b: l.y + l.h }); }
+                        for (const ii of textIdxs)  { const bx = this.textBBox(this.textLayers[ii]); rs.push({ x: bx.x, y: bx.y, r: bx.x + bx.w, b: bx.y + bx.h }); }
+                        for (const ii of mdIdxs)    { const bx = this.mdBBox(this.markdownLayers[ii]); rs.push({ x: bx.x, y: bx.y, r: bx.x + bx.w, b: bx.y + bx.h }); }
+                        const bx = Math.min(...rs.map(r => r.x)), by = Math.min(...rs.map(r => r.y));
+                        const baseBBox = { x: bx, y: by, w: Math.max(...rs.map(r => r.r)) - bx, h: Math.max(...rs.map(r => r.b)) - by };
+                        this.multiSel = { imageIdxs, textIdxs, mdIdxs, rotation: 0, baseBBox };
+                        this.selectedIdx = -1; this.selectedTextIdx = -1; this.selectedMdIdx = -1;
+                    } else if (total === 1) {
+                        // 只剩一個 → 回到單選
+                        this.multiSel = null;
+                        this.selectedIdx     = imageIdxs[0] ?? -1;
+                        this.selectedTextIdx = textIdxs[0]  ?? -1;
+                        this.selectedMdIdx   = mdIdxs[0]    ?? -1;
+                    } else {
+                        // 全部取消
+                        this.multiSel = null;
+                        this.selectedIdx = -1; this.selectedTextIdx = -1; this.selectedMdIdx = -1;
+                    }
+                    this.multiSelDrag = null;
+                    this.render();
+                    return;
+                }
+                // Ctrl+點擊空白處 → 什麼都不做（不觸發橡皮筋選取）
+                return;
+            }
             // ── 多圖層選取（multi-select group）優先處理 ────────────────
             if (this.multiSel) {
                 const mh = this.hitMultiSelHandle(mx, my);
@@ -3428,6 +3488,10 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         // 離開 paintselect 時先 commit fragment
         if (this.tool === 'paintselect' && t !== 'paintselect') {
             this.commitFragment();
+        }
+        // 離開 draw 時重置橡皮擦狀態，確保視覺與 flag 同步
+        if (this.tool === 'draw' && t !== 'draw') {
+            this.eraser = false;
         }
         // 清除圈選狀態
         this.multiSel      = null;
