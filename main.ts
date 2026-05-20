@@ -39,7 +39,7 @@ import {
 import { canvasFont, codeFont } from './fonts';
 
 // ─── UI ──────────────────────────────────────────────────────────────────────
-import { SaveModal, CanvasSizeModal, ProjectNameModal, VaultProjectPickerModal, VaultImagePickerModal, VaultNotePickerModal, DriveConflictModal } from './ui/modals';
+import { SaveModal, CanvasSizeModal, ProjectNameModal, VaultProjectPickerModal, VaultImagePickerModal, VaultNotePickerModal, DriveConflictModal, TextEditModal } from './ui/modals';
 
 // ─── 輸入處理 ─────────────────────────────────────────────────────────────────
 import { DesktopInputHandler }    from './input/input-desktop';
@@ -85,9 +85,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
     private selectedTextIdx  = -1;
     private textDragState:   TextDragState | null = null;
     private textFontSize     = 24;
-    private _textEditing: {
-        el: HTMLTextAreaElement; layerIdx: number; x: number; y: number;
-    } | null = null;
+    private _textEditing: Modal | null = null;
     private _mdEditing: {
         el: HTMLTextAreaElement; layerIdx: number;
     } | null = null;
@@ -355,7 +353,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
     }
 
     async onClose(): Promise<void> {
-        if (this._textEditing) { this._textEditing.el.remove(); this._textEditing = null; }
+        if (this._textEditing) { this._textEditing.close(); this._textEditing = null; }
         if (this._mdEditing)   { this._mdEditing.el.remove();   this._mdEditing   = null; }
         if (this._vaultModifyRef) { this.app.vault.offref(this._vaultModifyRef); this._vaultModifyRef = null; }
         if (this.paintFragment) this.commitFragment();
@@ -3244,96 +3242,66 @@ class EasyNoteView extends ItemView implements FeatureAPI {
 
     /** 在畫布上方顯示浮動 textarea，讓使用者輸入文字 */
     private openTextEditor(canvasX: number, canvasY: number, layerIdx = -1): void {
-        // 若已有開啟的編輯器，先提交再開新的
-        if (this._textEditing) this.commitTextEdit(this._textEditing);
+        // 若已有開啟的編輯器，先關閉
+        if (this._textEditing) { this._textEditing.close(); this._textEditing = null; }
 
         // 解析目標位置（編輯現有 → 用舊座標，新增 → 用點擊座標）
-        const posX = layerIdx >= 0 ? this.textLayers[layerIdx].x : canvasX;
-        const posY = layerIdx >= 0 ? this.textLayers[layerIdx].y : canvasY;
+        const posX  = layerIdx >= 0 ? this.textLayers[layerIdx].x : canvasX;
+        const posY  = layerIdx >= 0 ? this.textLayers[layerIdx].y : canvasY;
+        const initialText  = layerIdx >= 0 ? this.textLayers[layerIdx].text  : '';
+        const initialColor = layerIdx >= 0 ? this.textLayers[layerIdx].color : (this.textColorInput?.value ?? '#000000');
+        const fontSize     = layerIdx >= 0 ? this.textLayers[layerIdx].fontSize : this.textFontSize;
 
-        const canvasRect = this.canvas.getBoundingClientRect();
-        const screenX    = canvasRect.left + posX * this.zoom;
-        const screenY    = canvasRect.top  + posY * this.zoom;
-
-        const fontSize = layerIdx >= 0 ? this.textLayers[layerIdx].fontSize : this.textFontSize;
-
-        // 同步工具列顏色選擇器
-        if (layerIdx >= 0) {
-            this.textColorInput.value = this.textLayers[layerIdx].color;
-        }
-
-        const ta             = document.createElement('textarea');
-        ta.className         = 'easynote-text-editor';
-        ta.style.left        = `${screenX}px`;
-        ta.style.top         = `${screenY}px`;
-        ta.style.fontSize    = `${fontSize * this.zoom}px`;
-        ta.rows              = 3;
-        if (layerIdx >= 0) ta.value = this.textLayers[layerIdx].text;
-
-        document.body.appendChild(ta);
-        setTimeout(() => { ta.focus(); if (layerIdx >= 0) ta.select(); }, 10);
-
-        const state = { el: ta, layerIdx, x: posX, y: posY };
-        this._textEditing = state;
-
-        // Android 軟鍵盤彈出時會縮放 viewport → 觸發假的 blur
-        // 600ms 內的 blur 視為 spurious（鍵盤動畫），立即 refocus
-        let blurGuardUntil = 0;
-        ta.addEventListener('focus', () => { blurGuardUntil = Date.now() + 600; });
-        ta.addEventListener('blur', () => {
-            if (Date.now() < blurGuardUntil) {
-                requestAnimationFrame(() => { if (this._textEditing === state) ta.focus(); });
-                return;
-            }
-            if (this._textEditing === state) this.commitTextEdit(state);
-        });
-        ta.addEventListener('keydown', (e: KeyboardEvent) => {
-            if (e.key === 'Escape') {
-                e.preventDefault();
-                if (this._textEditing === state) {
-                    this._textEditing = null;
-                    ta.remove();
+        const modal = new TextEditModal(
+            this.app,
+            initialText,
+            initialColor,
+            (text, color) => {
+                // 確認 → 套用文字
+                this._textEditing = null;
+                this.pushHistory('編輯文字');
+                if (text.trim()) {
+                    if (layerIdx >= 0) {
+                        if (this.textLayers[layerIdx].linkedNotePath) {
+                            this.textLayers[layerIdx].linkedNotePath = undefined;
+                            new Notice('已解除筆記連結（文字已手動編輯）');
+                        }
+                        this.textLayers[layerIdx].text  = text;
+                        this.textLayers[layerIdx].color = color;
+                    } else {
+                        this.textLayers.push({ text, x: posX, y: posY, fontSize, color });
+                    }
+                } else if (layerIdx >= 0) {
+                    // 清空內容 → 刪除此文字圖層
+                    this.textLayers.splice(layerIdx, 1);
+                    if (this.selectedTextIdx >= layerIdx) {
+                        this.selectedTextIdx = Math.max(-1, this.selectedTextIdx - 1);
+                    }
                 }
-            }
-            e.stopPropagation(); // 防止快捷鍵
-        });
+                // 同步工具列顏色選擇器
+                if (this.textColorInput) this.textColorInput.value = color;
+                this.render();
+            },
+            () => {
+                // 取消 → 無操作
+                this._textEditing = null;
+            },
+        );
+        this._textEditing = modal;
+        modal.open();
     }
 
     private commitTextEdit(state: { el: HTMLTextAreaElement; layerIdx: number; x: number; y: number }): void {
+        // Legacy stub — no longer called; kept to avoid orphaned references during close
         this._textEditing = null;
-        const text = state.el.value;
         state.el.remove();
-        this.pushHistory('編輯文字');                 // 文字確認前先存快照
-
-        if (text.trim()) {
-            const fontSize = state.layerIdx >= 0 ? this.textLayers[state.layerIdx].fontSize : this.textFontSize;
-            const color    = this.textColorInput.value;
-            if (state.layerIdx >= 0) {
-                // 手動編輯 → 解除筆記連結
-                if (this.textLayers[state.layerIdx].linkedNotePath) {
-                    this.textLayers[state.layerIdx].linkedNotePath = undefined;
-                    new Notice('已解除筆記連結（文字已手動編輯）');
-                }
-                this.textLayers[state.layerIdx].text  = text;
-                this.textLayers[state.layerIdx].color = color;
-            } else {
-                this.textLayers.push({ text, x: state.x, y: state.y, fontSize, color });
-            }
-        } else if (state.layerIdx >= 0) {
-            // 清空內容 → 刪除此文字圖層
-            this.textLayers.splice(state.layerIdx, 1);
-            if (this.selectedTextIdx >= state.layerIdx) {
-                this.selectedTextIdx = Math.max(-1, this.selectedTextIdx - 1);
-            }
-        }
-        this.render();
     }
 
     // ── Markdown 圖層編輯器 ────────────────────────────────────────────────────
 
     private openMarkdownEditor(layerIdx: number): void {
         if (this._mdEditing)   this.commitMarkdownEdit(this._mdEditing);
-        if (this._textEditing) this.commitTextEdit(this._textEditing);
+        if (this._textEditing) { this._textEditing.close(); this._textEditing = null; }
 
         const ml          = this.markdownLayers[layerIdx];
         const canvasRect  = this.canvas.getBoundingClientRect();

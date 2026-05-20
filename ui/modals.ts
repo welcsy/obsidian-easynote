@@ -456,3 +456,89 @@ export class DriveConflictModal extends Modal {
 
     onClose(): void { this.contentEl.empty(); }
 }
+
+// ─── 文字編輯 Modal ───────────────────────────────────────────────────────────
+export class TextEditModal extends Modal {
+    private initialText:  string;
+    private initialColor: string;
+    private onCommit:  (text: string, color: string) => void;
+    private onCancel:  () => void;
+    private committed = false;
+
+    constructor(
+        app: App,
+        initialText:  string,
+        initialColor: string,
+        onCommit:  (text: string, color: string) => void,
+        onCancel:  () => void,
+    ) {
+        super(app);
+        this.initialText  = initialText;
+        this.initialColor = initialColor;
+        this.onCommit     = onCommit;
+        this.onCancel     = onCancel;
+    }
+
+    onOpen(): void {
+        const { contentEl } = this;
+        contentEl.empty();
+        // 讓 modal 本身套用 80vw × 80vh 佈局
+        this.modalEl.addClass('easynote-textedit-modal');
+        // contentEl 需要是 flex column 以讓 textarea 能伸展
+        contentEl.style.display       = 'flex';
+        contentEl.style.flexDirection = 'column';
+        contentEl.style.height        = '100%';
+        contentEl.createEl('h3', { text: '編輯文字' });
+
+        // 顏色選擇列
+        const colorRow = contentEl.createEl('div', { cls: 'easynote-textedit-colorrow' });
+        colorRow.createEl('label', { text: '文字顏色　', cls: 'easynote-textedit-colorlabel' });
+        const colorInput       = colorRow.createEl('input');
+        colorInput.type        = 'color';
+        colorInput.value       = this.initialColor;
+        colorInput.className   = 'easynote-textedit-colorpicker';
+
+        // 大型文字輸入區（高度由 flex 自動填滿剩餘空間）
+        const ta           = contentEl.createEl('textarea', { cls: 'easynote-textedit-ta' });
+        ta.value           = this.initialText;
+        ta.placeholder     = '在此輸入文字…';
+        ta.spellcheck      = false;
+
+        // 快捷鍵提示
+        contentEl.createEl('p', {
+            cls:  'easynote-textedit-hint',
+            text: 'Ctrl + Enter 確認　　Escape 取消',
+        });
+
+        // 按鈕列
+        const btnRow    = contentEl.createEl('div', { cls: 'easynote-size-btnrow' });
+        const cancelBtn = btnRow.createEl('button', { cls: 'easynote-btn', text: '取消' });
+        cancelBtn.addEventListener('click', () => { this.close(); });
+
+        const confirmBtn = btnRow.createEl('button', { cls: 'easynote-btn easynote-btn-save', text: '確認' });
+        confirmBtn.style.marginLeft = '8px';
+        confirmBtn.addEventListener('click', () => {
+            this.committed = true;
+            this.onCommit(ta.value, colorInput.value);
+            this.close();
+        });
+
+        // 鍵盤快捷鍵
+        ta.addEventListener('keydown', (e: KeyboardEvent) => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                this.close();
+            } else if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                e.preventDefault();
+                confirmBtn.click();
+            }
+        });
+
+        setTimeout(() => { ta.focus(); if (this.initialText) ta.select(); }, 50);
+    }
+
+    onClose(): void {
+        if (!this.committed) this.onCancel();
+        this.contentEl.empty();
+    }
+}

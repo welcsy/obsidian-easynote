@@ -194,6 +194,69 @@
     caret-color:   #ffffff;
 }
 
+/* ─── 文字編輯彈窗 ─────────────────────────────────────────────────────────── */
+
+/* 讓 Modal 本身佔螢幕 80% 寬高 */
+.easynote-textedit-modal {
+    width:      80vw  !important;
+    max-width:  80vw  !important;
+    height:     80vh  !important;
+    max-height: 80vh  !important;
+    display:    flex;
+    flex-direction: column;
+}
+/* contentEl 填滿 modal，讓內部可以做 flex 佈局 */
+.easynote-textedit-modal .modal-content {
+    flex:           1 1 auto;
+    display:        flex;
+    flex-direction: column;
+    overflow:       hidden;
+    padding:        16px 20px 12px;
+    box-sizing:     border-box;
+}
+.easynote-textedit-colorrow {
+    display:       flex;
+    align-items:   center;
+    flex-shrink:   0;
+    margin-bottom: 8px;
+}
+.easynote-textedit-colorlabel {
+    font-size:   13px;
+    flex-shrink: 0;
+}
+.easynote-textedit-colorpicker {
+    width:      32px;
+    height:     28px;
+    border:     none;
+    padding:    0;
+    background: none;
+    cursor:     pointer;
+}
+/* textarea 填滿剩餘空間，不用固定高度 */
+.easynote-textedit-ta {
+    flex:          1 1 auto;
+    width:         100%;
+    min-height:    0;       /* 讓 flex 能壓縮 */
+    resize:        none;    /* 由彈窗大小控制，不需手動拖曳 */
+    font-size:     15px;
+    line-height:   1.5;
+    padding:       8px;
+    border-radius: 4px;
+    box-sizing:    border-box;
+    font-family:   inherit;
+}
+.easynote-textedit-hint {
+    flex-shrink: 0;
+    font-size:   11px;
+    color:       var(--text-muted);
+    margin:      4px 0 6px;
+}
+/* 按鈕列固定在底部 */
+.easynote-textedit-modal .easynote-size-btnrow {
+    flex-shrink: 0;
+    margin-top:  4px;
+}
+
 /* 色彩選擇按鈕 */
 .easynote-color-btn {
     width:        26px;
