@@ -18,7 +18,7 @@
   "license": "MIT",
   "devDependencies": {
     "@cucumber/cucumber": "^12.9.0",
-    "@types/jsdom": "^28.0.3",
+    "@types/jsdom": "^21.1.7",
     "@types/node": "^16.11.6",
     "@typescript-eslint/eslint-plugin": "5.29.0",
     "@typescript-eslint/parser": "5.29.0",
@@ -29,7 +29,7 @@
     "obsidian": "latest",
     "tslib": "2.4.0",
     "tsx": "^4.22.3",
-    "typescript": "4.7.4",
+    "typescript": "^4.7.4",
     "vitest": "^4.1.7"
   }
 }
