@@ -341,11 +341,6 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         const autosaveFile = this.app.vault.getAbstractFileByPath(autosavePath);
         if ((this.settings.startupMode ?? 'new') === 'previous' && autosaveFile instanceof TFile) {
             await this.loadProject(autosaveFile);
-            // loadProject 裡的 render() 會排程 autosave，取消避免立即覆寫
-            if (this.autoSaveTimer !== null) {
-                clearTimeout(this.autoSaveTimer);
-                this.autoSaveTimer = null;
-            }
         } else {
             // 新畫布：推入空白起始狀態
             this.pushHistory('初始狀態');
@@ -895,9 +890,9 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         document.body.appendChild(dot);
         this._cursorDot = dot;
 
-        // 捲動時重新渲染可見 viewport
+        // 捲動時重新渲染可見 viewport（純平移，不觸發自動暫存）
         this.canvasWrapper.addEventListener('scroll', () => {
-            if (!this.drawing) this.render();
+            if (!this.drawing) this.render(undefined, false);
         }, { passive: true });
 
         // -- Canvas pointer events (Device Layer via CanvasInputHandler) --------
@@ -943,7 +938,8 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             // 視窗縮放事件不重設手動尺寸，但仍需更新 canvas 大小（跟 viewport 同步）
             const cleared = this.applyZoom();
             // canvas 尺寸改變時內容已被清空（HTML Canvas 規格），無論是否 window resize 都必須重繪
-            if (!fromWindowResize || cleared) this.render();
+            // 視窗調整大小 / 初始化屬純視圖操作，不觸發自動暫存
+            if (!fromWindowResize || cleared) this.render(undefined, false);
             return;
         }
         // 無手動尺寸：以 viewport 大小作為邏輯畫布尺寸
@@ -952,7 +948,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         this.manualWidth  = w;
         this.manualHeight = h;
         this.applyZoom();
-        this.render();
+        this.render(undefined, false);
     }
 
     setCanvasSize(w: number, h: number): void {
@@ -960,7 +956,8 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         this.manualWidth  = w;
         this.manualHeight = h;
         this.applyZoom();
-        this.render();
+        this.render(undefined, false);
+        this.scheduleAutosave();  // 畫布大小變更需要自動暫存
     }
 
     // -- Canvas pointer events (Feature Layer implementation) ------------------
@@ -1032,7 +1029,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
                 this._wetLayerActive = false;
                 this._vpCache        = null;
                 this._currentStroke  = null;  // 取消進行中的筆觸
-                this.scheduleRender();
+                this.scheduleRender(false);   // 純視圖刷新，筆觸已取消，不觸發暫存
             }
 
             this.drawing       = false;
@@ -1978,7 +1975,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
 
     // ── 合成渲染 ──────────────────────────────────────────────────────────────
 
-    private render(clip?: { x: number; y: number; w: number; h: number }): void {
+    private render(clip?: { x: number; y: number; w: number; h: number }, dirty = true): void {
         const vp = this.getViewportRect();
         const sl = this.canvasWrapper.scrollLeft;
         const st = this.canvasWrapper.scrollTop;
@@ -2156,10 +2153,10 @@ class EasyNoteView extends ItemView implements FeatureAPI {
                 this.drawFragmentHandles(this.paintFragment);
             }
         }
-        // 每次畫面更新後排程自動儲存（debounce）
+        // 每次畫面更新後排程自動儲存（debounce），純視圖操作（平移、縮放、開啟）不觸發
         if (clip) this.ctx.restore();   // 回復 clip
         this.ctx.restore();             // 回復 setTransform
-        this.scheduleAutosave();
+        if (dirty) this.scheduleAutosave();
     }
 
     private cornerPositions(lay: ImageLayer): [number, number][] {
@@ -3052,12 +3049,12 @@ class EasyNoteView extends ItemView implements FeatureAPI {
     }
 
     /** rAF-throttled render：繪畫期間每幀最多 composite 一次，避免大畫布卡頓 */
-    private scheduleRender(): void {
+    private scheduleRender(dirty = true): void {
         if (this._rafId !== null) return;
         this._rafId = requestAnimationFrame(() => {
             this._rafId = null;
             // viewport-canvas 模式：canvas 就是 viewport，直接 render 即可
-            this.render();
+            this.render(undefined, dirty);
         });
     }
 
@@ -3756,7 +3753,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         }
         this.refreshStatus();
     }
-    resetZoom(): void { this.zoom = 1.0; this.applyZoom(); this.render(); this.refreshStatus(); }
+    resetZoom(): void { this.zoom = 1.0; this.applyZoom(); this.render(undefined, false); this.refreshStatus(); }
     zoomAtCursor(clientX: number, clientY: number, deltaY: number): void {
         const ZOOM_STEP = 0.1; const MIN_ZOOM = 0.1; const MAX_ZOOM = 8.0;
         const oldZoom = this.zoom;
@@ -3770,7 +3767,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         this.applyZoom();
         this.canvasWrapper.scrollLeft = (prevSL + cx) * ratio - cx;
         this.canvasWrapper.scrollTop  = (prevST + cy) * ratio - cy;
-        this.render();
+        this.render(undefined, false);
         this.refreshStatus();
     }
     pasteImageFromFile(file: File): void { this.loadImageFromBlob(file); }
@@ -4440,7 +4437,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
 
             this.setTool('pan');
             this.applyZoom();
-            this.render();
+            this.render(undefined, false);  // 載入畫布屬純視圖還原，不觸發自動暫存
             this.historyIdx = -1;
             this.pushHistory('載入專案');
             this.lastProjectName = file.basename.replace(/\.enote$/i, '');
