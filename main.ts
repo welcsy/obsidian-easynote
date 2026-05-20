@@ -3790,6 +3790,22 @@ class EasyNoteView extends ItemView implements FeatureAPI {
     }
     pasteImageFromFile(file: File): void { this.loadImageFromBlob(file); }
 
+    pasteText(text: string): void {
+        const vc = this.viewportCenter();
+        const x  = Math.max(0, Math.min(vc.x, this.manualWidth  - 10));
+        const y  = Math.max(0, Math.min(vc.y, this.canvas.height - 10));
+        this.pushHistory('貼上文字');
+        this.textLayers.push({ text, x, y, fontSize: this.textFontSize, color: this.textColorInput?.value ?? '#000000' });
+        this.selectedTextIdx = this.textLayers.length - 1;
+        this.selectedIdx     = -1;
+        this.selectedMdIdx   = -1;
+        this.setTool('select');
+        this.render();
+        this.scheduleAutosave();
+        this.refreshStatus();
+        new Notice('已貼上文字', 1500);
+    }
+
     // ── 長按選單（Android 觸控）────────────────────────────────────────────
     /** 在 (clientX, clientY) 顯示浮動選單，items: [{ label, action }] */
     private showContextMenu(clientX: number, clientY: number,

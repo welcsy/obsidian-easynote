@@ -135,10 +135,21 @@ export class DesktopInputHandler {
         if (tag === 'INPUT' || tag === 'TEXTAREA') return;
         const items = e.clipboardData?.items;
         if (!items) return;
+        // 圖片優先
         for (let i = 0; i < items.length; i++) {
             if (items[i].type.startsWith('image/')) {
                 const blob = items[i].getAsFile();
                 if (blob) { e.preventDefault(); this.api.pasteImageFromFile(blob); }
+                return;
+            }
+        }
+        // 文字次之
+        for (let i = 0; i < items.length; i++) {
+            if (items[i].type === 'text/plain') {
+                items[i].getAsString((text) => {
+                    const trimmed = text.trim();
+                    if (trimmed) { e.preventDefault(); this.api.pasteText(trimmed); }
+                });
                 return;
             }
         }

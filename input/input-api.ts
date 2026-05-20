@@ -70,6 +70,8 @@ export interface FeatureAPI {
     // ── Clipboard (system) ──────────────────────────────────────────────────
     /** 貼上來自系統剪貼簿的圖片檔案 */
     pasteImageFromFile(file: File): void;
+    /** 貼上來自系統剪貼簿的純文字，建立文字圖層 */
+    pasteText(text: string): void;
 
     // ── Mode guards ──────────────────────────────────────────────────────────
     /** stroke-layer 模式下 paintselect 工具無意義，回傳 false 時應忽略對應快捷鍵 */
