@@ -39,7 +39,7 @@ import {
 import { canvasFont, codeFont } from './fonts';
 
 // ─── UI ──────────────────────────────────────────────────────────────────────
-import { SaveModal, CanvasSizeModal, ProjectNameModal, VaultProjectPickerModal, VaultImagePickerModal, VaultNotePickerModal } from './ui/modals';
+import { SaveModal, CanvasSizeModal, ProjectNameModal, VaultProjectPickerModal, VaultImagePickerModal, VaultNotePickerModal, DriveConflictModal } from './ui/modals';
 
 // ─── 輸入處理 ─────────────────────────────────────────────────────────────────
 import { DesktopInputHandler }    from './input/input-desktop';
@@ -204,6 +204,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
     // 自動儲存
     private autoSaveTimer:        ReturnType<typeof setTimeout> | null = null;
     private _driveUploadTimer:    ReturnType<typeof setTimeout> | null = null; // Drive 上傳 debounce
+    private _lastDriveSyncTime:   Date | null = null; // 上次與 Drive 同步的時間點
     private lastAutoSaveTime: Date | null = null;
     private static readonly AUTOSAVE_DEBOUNCE_MS = 3000;   // 最後一次變更後 3 秒觸發
     private _autoSyncTimer:          ReturnType<typeof setInterval> | null = null; // 定時 auto-sync
@@ -254,21 +255,24 @@ class EasyNoteView extends ItemView implements FeatureAPI {
     private _vaultModifyRef:      import('obsidian').EventRef | null = null;
     private _suppressVaultModify  = false;
     // Google Drive 回呼
-    private driveUpload:   ((filename: string, content: Uint8Array) => Promise<void>) | null = null;
-    private driveDownload: ((filename: string) => Promise<Uint8Array | null>) | null = null;
+    private driveUpload:           ((filename: string, content: Uint8Array) => Promise<void>) | null = null;
+    private driveDownload:         ((filename: string) => Promise<Uint8Array | null>) | null = null;
+    private driveGetModifiedTime:  ((filename: string) => Promise<Date | null>) | null = null;
 
     constructor(
         leaf: WorkspaceLeaf,
         settings: EasyNoteSettings,
         saveSettings: () => Promise<void>,
-        driveUpload: ((filename: string, content: Uint8Array) => Promise<void>) | null = null,
-        driveDownload: ((filename: string) => Promise<Uint8Array | null>) | null = null,
+        driveUpload:          ((filename: string, content: Uint8Array) => Promise<void>) | null = null,
+        driveDownload:        ((filename: string) => Promise<Uint8Array | null>) | null = null,
+        driveGetModifiedTime: ((filename: string) => Promise<Date | null>) | null = null,
     ) {
         super(leaf);
-        this.settings      = settings;
-        this.saveSettings  = saveSettings;
-        this.driveUpload   = driveUpload;
-        this.driveDownload = driveDownload;
+        this.settings             = settings;
+        this.saveSettings         = saveSettings;
+        this.driveUpload          = driveUpload;
+        this.driveDownload        = driveDownload;
+        this.driveGetModifiedTime = driveGetModifiedTime;
     }
 
     getViewType():    string { return VIEW_TYPE;  }
@@ -4295,11 +4299,28 @@ class EasyNoteView extends ItemView implements FeatureAPI {
                 const driveFilename = this.lastProjectName
                     ? `${this.lastProjectName}.enote`
                     : EasyNoteView.AUTOSAVE_FILENAME;
-                this._driveUploadTimer = setTimeout(() => {
+                this._driveUploadTimer = setTimeout(async () => {
                     this._driveUploadTimer = null;
-                    this.driveUpload!(driveFilename, bytes).catch((err) => {
+                    // 計時到期時才做衝突檢查（此時 Drive 可能已被其他裝置更新）
+                    if (this.driveGetModifiedTime && this._lastDriveSyncTime) {
+                        try {
+                            const driveTime = await this.driveGetModifiedTime(driveFilename);
+                            if (driveTime && driveTime > this._lastDriveSyncTime) {
+                                const shouldUpload = await new Promise<boolean>((resolve) => {
+                                    new DriveConflictModal(this.app, driveTime, resolve).open();
+                                });
+                                if (!shouldUpload) return;
+                            }
+                        } catch (e) {
+                            console.warn('[EasyNote] Drive time check failed, proceeding with upload:', e);
+                        }
+                    }
+                    this.driveUpload!(driveFilename, bytes).then(() => {
+                        this._lastDriveSyncTime = new Date();
+                        new Notice('✓ 已同步至 Google Drive', 2000);
+                    }).catch((err) => {
                         console.error('[EasyNote] Drive upload error:', err);
-                        new Notice('Google Drive 上傳失敗', 2000);
+                        new Notice('✗ Google Drive 上傳失敗', 2000);
                     });
                 }, delayMs);
             }
@@ -4362,12 +4383,30 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             }
             // 儲存後同步上傳到 Google Drive
             if (this.settings.googleDriveEnabled && this.driveUpload) {
-                try {
-                    await this.driveUpload(`${baseName}.enote`, bytes);
-                    new Notice('✓ 已同步至 Google Drive', 2000);
-                } catch (driveErr) {
-                    console.error('[EasyNote] Drive upload error:', driveErr);
-                    new Notice('✗ Google Drive 上傳失敗', 2000);
+                const driveFilename = `${baseName}.enote`;
+                // 上傳前確認 Drive 上的版本是否比本機新
+                let shouldUpload = true;
+                if (this.driveGetModifiedTime && this._lastDriveSyncTime) {
+                    try {
+                        const driveTime = await this.driveGetModifiedTime(driveFilename);
+                        if (driveTime && driveTime > this._lastDriveSyncTime) {
+                            shouldUpload = await new Promise<boolean>((resolve) => {
+                                new DriveConflictModal(this.app, driveTime, resolve).open();
+                            });
+                        }
+                    } catch (e) {
+                        console.warn('[EasyNote] Drive time check failed, proceeding with upload:', e);
+                    }
+                }
+                if (shouldUpload) {
+                    try {
+                        await this.driveUpload(driveFilename, bytes);
+                        this._lastDriveSyncTime = new Date();
+                        new Notice('✓ 已同步至 Google Drive', 2000);
+                    } catch (driveErr) {
+                        console.error('[EasyNote] Drive upload error:', driveErr);
+                        new Notice('✗ Google Drive 上傳失敗', 2000);
+                    }
                 }
             }
         } catch (err) {
@@ -4384,6 +4423,7 @@ class EasyNoteView extends ItemView implements FeatureAPI {
                     const content = await this.driveDownload(file.name);
                     if (content) {
                         await this.app.vault.modifyBinary(file, content.buffer as ArrayBuffer);
+                        this._lastDriveSyncTime = new Date(); // 記錄同步時間點
                         new Notice('✓ 已從 Google Drive 同步', 2000);
                     }
                 } catch (driveErr) {
@@ -5182,6 +5222,7 @@ export default class EasyNotePlugin extends Plugin {
             () => this.saveSettings(),
             (filename, content) => this.uploadToGoogleDrive(filename, content),
             (filename) => this.downloadFromGoogleDrive(filename),
+            (filename) => this.getGoogleDriveFileModifiedTime(filename),
         ));
 
         // 左側 Ribbon 圖示
@@ -5369,6 +5410,24 @@ export default class EasyNotePlugin extends Plugin {
             headers: { Authorization: `Bearer ${token}` },
         });
         return new Uint8Array(resp.arrayBuffer);
+    }
+
+    /** 取得 Google Drive 上指定檔案的最後修改時間（找不到時回傳 null） */
+    async getGoogleDriveFileModifiedTime(filename: string): Promise<Date | null> {
+        if (!this.settings.googleDriveEnabled) return null;
+        const token = await this.getValidAccessToken();
+        if (!token) return null;
+        const folderId = await this.ensureGoogleDriveFolder(token);
+        const q = encodeURIComponent(`name='${filename}' and '${folderId}' in parents and trashed=false`);
+        const searchResp = await requestUrl({
+            url:    `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,modifiedTime)`,
+            method: 'GET',
+            headers: { Authorization: `Bearer ${token}` },
+        });
+        const files = searchResp.json.files ?? [];
+        if (files.length === 0) return null;
+        const modifiedTime: string | undefined = files[0].modifiedTime;
+        return modifiedTime ? new Date(modifiedTime) : null;
     }
 
     /** 開啟瀏覽器引導使用者完成 Google OAuth2 授權，並儲存 Refresh Token */

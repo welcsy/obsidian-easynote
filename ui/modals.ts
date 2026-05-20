@@ -423,3 +423,36 @@ export class VaultNotePickerModal extends Modal {
 
     onClose(): void { this.contentEl.empty(); }
 }
+
+// ─── Google Drive 版本衝突確認 Modal ─────────────────────────────────────────
+export class DriveConflictModal extends Modal {
+    private driveTime: Date;
+    private onResolve: (overwrite: boolean) => void;
+
+    constructor(app: App, driveTime: Date, onResolve: (overwrite: boolean) => void) {
+        super(app);
+        this.driveTime = driveTime;
+        this.onResolve = onResolve;
+    }
+
+    onOpen(): void {
+        const { contentEl } = this;
+        contentEl.empty();
+        contentEl.createEl('h3', { text: 'Google Drive 版本衝突' });
+        contentEl.createEl('p', {
+            text: `Google Drive 上的檔案較新（最後修改：${this.driveTime.toLocaleString('zh-TW')}）。`,
+        });
+        contentEl.createEl('p', { text: '是否要以目前本機版本覆蓋 Google Drive 上的檔案？' });
+
+        const btnRow = contentEl.createEl('div', { cls: 'easynote-size-btnrow' });
+
+        const cancelBtn = btnRow.createEl('button', { cls: 'easynote-btn', text: '取消上傳（保留 Drive 版本）' });
+        cancelBtn.addEventListener('click', () => { this.onResolve(false); this.close(); });
+
+        const overwriteBtn = btnRow.createEl('button', { cls: 'easynote-btn mod-warning', text: '覆蓋 Drive 版本' });
+        overwriteBtn.style.marginLeft = '8px';
+        overwriteBtn.addEventListener('click', () => { this.onResolve(true); this.close(); });
+    }
+
+    onClose(): void { this.contentEl.empty(); }
+}
