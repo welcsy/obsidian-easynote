@@ -3416,6 +3416,18 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         this.loadImageFromUrl(this.app.vault.getResourcePath(file));
     }
 
+    /** 回傳目前檢視畫面中心對應的可識別畫布坐標 */
+    private viewportCenter(): { x: number; y: number } {
+        const sl = this.canvasWrapper.scrollLeft;
+        const st = this.canvasWrapper.scrollTop;
+        const vw = this.canvasWrapper.clientWidth;
+        const vh = this.canvasWrapper.clientHeight;
+        return {
+            x: Math.round((sl + vw / 2) / this.zoom),
+            y: Math.round((st + vh / 2) / this.zoom),
+        };
+    }
+
     private loadImageFromUrl(url: string): void {
         const img = new Image();
         img.onload = () => {
@@ -3424,8 +3436,9 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             const scale = Math.min(cw / img.naturalWidth, ch / img.naturalHeight, 1);
             const w = Math.round(img.naturalWidth  * scale);
             const h = Math.round(img.naturalHeight * scale);
-            const x = Math.round((cw - w) / 2);
-            const y = Math.round((ch - h) / 2);
+            const vc = this.viewportCenter();
+            const x = Math.max(0, Math.min(Math.round(vc.x - w / 2), cw - w));
+            const y = Math.max(0, Math.min(Math.round(vc.y - h / 2), ch - h));
             this.pushHistory('載入圖片');             // 圖片對入前先存快照
             this.imageLayers.push({ img, x, y, w, h });
             this.selectedIdx = this.imageLayers.length - 1;
@@ -4120,8 +4133,9 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             }
             this.pushHistory('貼上繪畫');
             const c = this.clipboard;
-            const px = Math.max(0, Math.floor((this.manualWidth  - c.w) / 2));
-            const py = Math.max(0, Math.floor((this.canvas.height - c.h) / 2));
+            const vc = this.viewportCenter();
+            const px = Math.max(0, Math.min(Math.floor(vc.x - c.w / 2), this.manualWidth  - c.w));
+            const py = Math.max(0, Math.min(Math.floor(vc.y - c.h / 2), this.canvas.height - c.h));
             const newOffscreen = document.createElement('canvas');
             newOffscreen.width  = c.offscreen.width;
             newOffscreen.height = c.offscreen.height;
@@ -4137,8 +4151,9 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         const OFFSET = 20;
         if (this.clipboard.type === 'image') {
             const c = this.clipboard;
-            const x = Math.min(OFFSET, this.manualWidth  - c.w);
-            const y = Math.min(OFFSET, this.canvas.height - c.h);
+            const vc = this.viewportCenter();
+            const x = Math.max(0, Math.min(Math.round(vc.x - c.w / 2), this.manualWidth  - c.w));
+            const y = Math.max(0, Math.min(Math.round(vc.y - c.h / 2), this.canvas.height - c.h));
             this.imageLayers.push({ img: c.img, x, y, w: c.w, h: c.h });
             this.selectedIdx     = this.imageLayers.length - 1;
             this.selectedTextIdx = -1;
