@@ -202,7 +202,8 @@ class EasyNoteView extends ItemView implements FeatureAPI {
     private static readonly LONG_PRESS_SLOP  = 10;    // 允許移動距離（px）
 
     // 自動儲存
-    private autoSaveTimer:   ReturnType<typeof setTimeout> | null = null;
+    private autoSaveTimer:        ReturnType<typeof setTimeout> | null = null;
+    private _driveUploadTimer:    ReturnType<typeof setTimeout> | null = null; // Drive 上傳 debounce
     private lastAutoSaveTime: Date | null = null;
     private static readonly AUTOSAVE_DEBOUNCE_MS = 3000;   // 最後一次變更後 3 秒觸發
     private _autoSyncTimer:          ReturnType<typeof setInterval> | null = null; // 定時 auto-sync
@@ -4287,15 +4288,20 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             } else {
                 await this.app.vault.createBinary(filepath, bytes.buffer as ArrayBuffer);
             }
-            // 上傳到 Google Drive（若已啟用）
+            // 排程上傳到 Google Drive（1 分鐘 debounce，避免同步過於頻繁）
             if (this.settings.googleDriveEnabled && this.driveUpload) {
+                const delayMs = this.settings.googleDriveUploadDelayMs ?? 60000;
+                if (this._driveUploadTimer !== null) clearTimeout(this._driveUploadTimer);
                 const driveFilename = this.lastProjectName
                     ? `${this.lastProjectName}.enote`
                     : EasyNoteView.AUTOSAVE_FILENAME;
-                this.driveUpload(driveFilename, bytes).catch((err) => {
-                    console.error('[EasyNote] Drive upload error:', err);
-                    new Notice('Google Drive 上傳失敗', 2000);
-                });
+                this._driveUploadTimer = setTimeout(() => {
+                    this._driveUploadTimer = null;
+                    this.driveUpload!(driveFilename, bytes).catch((err) => {
+                        console.error('[EasyNote] Drive upload error:', err);
+                        new Notice('Google Drive 上傳失敗', 2000);
+                    });
+                }, delayMs);
             }
             this.lastAutoSaveTime = new Date();
             this.refreshStatus();
@@ -4349,6 +4355,11 @@ class EasyNoteView extends ItemView implements FeatureAPI {
             new Notice(`✓ 專案已儲存: ${filename}`);
             this.lastProjectName = baseName;
             this.refreshStatus();
+            // 手動儲存：取消待執行的自動暫存 Drive debounce（此次手動儲存已包含最新內容）
+            if (this._driveUploadTimer !== null) {
+                clearTimeout(this._driveUploadTimer);
+                this._driveUploadTimer = null;
+            }
             // 儲存後同步上傳到 Google Drive
             if (this.settings.googleDriveEnabled && this.driveUpload) {
                 try {

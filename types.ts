@@ -31,6 +31,8 @@ export interface EasyNoteSettings {
     toolbarLayout?: 'full' | 'compact';
     // 精簡模式快捷列（最多 8 個捷徑 ID 或 'none'）
     toolbarShortcuts?: string[];
+    // Google Drive 上傳 debounce（毫秒），自動暫存後等待此時間才上傳，預設 60 秒
+    googleDriveUploadDelayMs?: number;
 }
 export const DEFAULT_SETTINGS: EasyNoteSettings = {
     defaultColorIdx:  0,
@@ -57,6 +59,7 @@ export const DEFAULT_SETTINGS: EasyNoteSettings = {
     toolbarZoom:           1.0,
     toolbarLayout:         'full',
     toolbarShortcuts:      ['eraser', 'colors', 'undo', 'redo', 'pan', 'saveProject', 'export', 'none'],
+    googleDriveUploadDelayMs: 60000,
 };
 
 // ─── 向量筆觸 ─────────────────────────────────────────────────────────────────
