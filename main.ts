@@ -4397,6 +4397,16 @@ class EasyNoteView extends ItemView implements FeatureAPI {
     }
 
     // ── 專案儲存 / 載入 (.enote) ──────────────────────────────────────────────
+    triggerSaveProject(): void {
+        const ts = this.localTimestamp();
+        const defaultName = this.lastProjectName || `EasyNote-${ts}`;
+        new ProjectNameModal(this.app, defaultName, (name) => this.saveProject(name)).open();
+    }
+
+    triggerLoadProject(): void {
+        new VaultProjectPickerModal(this.app, (file) => this.loadProject(file)).open();
+    }
+
     async saveProject(baseName: string): Promise<void> {
         try {
             const folder = normalizePath(this.settings.saveFolder);
@@ -5298,6 +5308,30 @@ export default class EasyNotePlugin extends Plugin {
             id:       'open-easynote',
             name:     '開啟 EasyNote 手繪筆記',
             callback: () => this.activateView(),
+        });
+
+        this.addCommand({
+            id:   'save-project',
+            name: '儲存畫布',
+            hotkeys: [{ modifiers: ['Ctrl', 'Shift'], key: 's' }],
+            checkCallback: (checking: boolean) => {
+                const view = this.app.workspace.getActiveViewOfType(EasyNoteView);
+                if (!view) return false;
+                if (!checking) view.triggerSaveProject();
+                return true;
+            },
+        });
+
+        this.addCommand({
+            id:   'load-project',
+            name: '載入畫布',
+            hotkeys: [{ modifiers: ['Ctrl', 'Shift'], key: 'o' }],
+            checkCallback: (checking: boolean) => {
+                const view = this.app.workspace.getActiveViewOfType(EasyNoteView);
+                if (!view) return false;
+                if (!checking) view.triggerLoadProject();
+                return true;
+            },
         });
 
         // 設定頁面
