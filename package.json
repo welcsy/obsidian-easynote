@@ -1,7 +1,7 @@
 {
   "name": "easynote",
-  "version": "1.3.20",
-  "description": "Obsidian drawing plugin (Windows & Android only) with Pixel / Image brush modes, touch gestures, and .enote project format",
+  "version": "1.4.0",
+  "description": "Obsidian drawing plugin with multi-language UI, Pixel/Image brush modes, pan/hand tool, touch/stylus support, .enote project format, and advanced layer management.",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
@@ -13,8 +13,25 @@
     "test:bdd:dry": "cucumber-js --dry-run",
     "test:all": "vitest run && cucumber-js"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "obsidian-plugin",
+    "drawing",
+    "canvas",
+    "handwriting",
+    "markdown",
+    "wikilink",
+    "i18n",
+    "multilanguage",
+    "touch",
+    "stylus",
+    "pan",
+    "image-layer",
+    "text-layer",
+    "undo",
+    "redo",
+    ".enote"
+  ],
+  "author": "welcsy",
   "license": "MIT",
   "devDependencies": {
     "@cucumber/cucumber": "^12.9.0",

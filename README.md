@@ -1,11 +1,156 @@
-# EasyNote — Obsidian Drawing Plugin
 
 > **Platform compatibility:** Currently tested and supported on **Windows** and **Android** only.
 > macOS, iOS, and Linux have not been verified and may have issues.
 
 A full-featured drawing canvas in the Obsidian sidebar. Supports multi-color brushes, eraser, image layers (including multi-layer rubber-band selection), text layers, Markdown layers (with `[[wikilink]]` and `[text](url)` links), and named undo / redo history. Canvas state is saved in `.enote` format and can be resumed at any time.
 
+ 
+# EasyNote — Obsidian Drawing Plugin
+
+> **Platform compatibility:** Windows and Android fully supported. macOS, iOS, and Linux are untested.
+
+EasyNote is a powerful, multi-language drawing canvas for Obsidian. It supports multi-color brushes, eraser, image layers (with multi-select), text layers, Markdown layers (with `[[wikilink]]` and `[text](url)`), named undo/redo, and more. Canvas state is saved as `.enote` and can be resumed at any time.
+
 ---
+
+## Features
+
+### Drawing & Canvas Tools
+- **Multi-color brush**: 5 customizable colors (`1`–`5`), long-press to edit
+- **Eraser** (`E`):
+  - **Pixel mode**: transparent erase (does not affect image layers)
+  - **Image mode**: tap to delete stroke layer
+- **Brush size**: 7-step or continuous (1–60 px), real-time slider
+- **Opacity**: 1%–100%
+- **Brush mode**:
+  - **Pixel mode**: strokes drawn directly on paint layer
+  - **Image mode** (default): each stroke becomes a selectable layer
+- **Paint select** (`M`, Pixel mode): rubber-band select, move/resize/merge
+- **Pan/Hand tool**: Middle-button drag or select Pan tool to move canvas
+
+### Layer & Selection Tools
+- **Select tool** (`S`):
+  - Single tap → move/resize, `Del` to delete
+  - **Rubber-band select**: drag to group-select images/text/Markdown layers
+- **Multi-select**: Grouped layers can be moved, resized, rotated, or deleted together
+- **Load images**: File picker, drag-and-drop, or `Ctrl+V` paste
+- **Load Obsidian image**: Pick from Vault
+
+### Text & Markdown
+- **Text layer** (`T`): Click to add, double-click to edit
+- **Markdown layer**: Load Vault `.md` file for live rendering and bidirectional sync; double-click to edit
+  - `[[wikilink]]` — Click to open in Obsidian (now works in both Select and Pan modes)
+  - `[text](url)` — Click to open in browser
+
+### Undo / Redo & History
+- **Undo/Redo**: `Ctrl+Z` / `Ctrl+Y`, up to 50 steps
+- **History dropdown**: Jump to any step by name
+
+### Canvas Management
+- **Save/Load Canvas**: Save as `.enote`, manage multiple canvases
+- **Export**: Flatten and export as PNG/JPEG/WebP
+- **Canvas size**: Adjustable, default 1920×1080
+- **Zoom & Pan**: Scroll-wheel zoom (cursor-anchored), pan with hand tool or middle mouse; `0` resets zoom
+
+### Touch & Stylus Support
+- **Pinch-to-zoom / pan**: Two-finger gesture
+- **Long press**: Context menu
+- **Stylus**: Native Pointer Events
+
+### Internationalization (i18n)
+- **Languages**: English (default), Traditional Chinese, Simplified Chinese, Japanese, Korean
+- **Language can be changed in settings**
+
+---
+
+## Layer Rendering Order
+
+| Layer            | Description                                 |
+|------------------|---------------------------------------------|
+| Paint layer      | Brush strokes (Pixel/Image mode)            |
+| Markdown layers  | Rendered Vault notes                        |
+| Text layers      | Movable text boxes                          |
+| Image layers     | Loaded images (bottom-most)                 |
+
+---
+
+## Keyboard Shortcuts
+
+| Key           | Action                                      |
+|---------------|---------------------------------------------|
+| `1`–`5`       | Switch brush color                          |
+| `E`           | Toggle eraser                              |
+| `T`           | Text tool                                  |
+| `S`           | Select tool (with multi-select)             |
+| `M`           | Paint select (Pixel mode only)              |
+| `+` / `-`     | Increase / decrease brush size              |
+| `0`           | Reset zoom to 100%                          |
+| `Ctrl+Z`      | Undo                                        |
+| `Ctrl+Y`      | Redo                                        |
+| `Ctrl+C`      | Copy selected layer                         |
+| `Ctrl+X`      | Cut selected layer                          |
+| `Ctrl+V`      | Paste (internal clipboard or image)         |
+| `Del`         | Delete selected layer/group                 |
+| `Esc`         | Cancel selection/deselect group             |
+| Scroll wheel  | Zoom canvas                                 |
+| Middle-drag   | Pan canvas                                  |
+
+---
+
+## Settings
+
+| Setting                | Description                                              | Default         |
+|------------------------|---------------------------------------------------------|-----------------|
+| Language               | UI language (English, 中文, 日本語, 한국어)              | English         |
+| Default color          | Brush color on open                                     | Black           |
+| Brush mode             | Pixel (direct paint) or Image (each stroke = layer)     | Image           |
+| Brush size mode        | 7-step or continuous 1–60 px                            | 7-step          |
+| Default brush size     | Brush size on open                                      | Step 2 (6 px)   |
+| Default 5-color set    | Initial palette for color swatches                      | Black, Red, Blue, Green, Orange |
+| Startup canvas mode    | New canvas or resume previous                           | New canvas      |
+| Default canvas size    | Initial size for new canvases                           | 1920 × 1080     |
+| Paint resolution scale | 1.0 = full res; 0.5 = performance mode                  | 1.0             |
+| Timezone               | For export filename timestamps                          | Asia/Taipei     |
+| Auto sync              | Periodically reload `.enote` from Vault                 | Off             |
+| Periodic auto-save     | Periodically auto-save to `.enote`                      | Off             |
+| Save folder            | Where to export PNGs and `.enote` files                 | EasyNote        |
+| Google Drive sync      | Backup/sync to Google Drive                             | Off             |
+
+---
+
+## The .enote Format
+
+`.enote` is EasyNote's project format. It stores the canvas, paint, image, text, and Markdown layers.
+
+### Show .enote files in Obsidian
+
+Obsidian hides unknown extensions by default. To show `.enote` files:
+
+> **Settings → Files & Links → Detect all file extensions → On**
+
+---
+
+## Installation
+
+### Manual
+1. Download `main.js`, `manifest.json`, and `styles.css` from [Releases](../../releases)
+2. Copy to `.obsidian/plugins/easynote/` in your Vault
+3. Enable **Easy Note** in Obsidian Settings → Community Plugins
+
+### Build from source
+```bash
+git clone <repo-url>
+cd easynote
+npm install
+npm run build
+```
+
+---
+
+## Requirements
+
+- Obsidian `1.0.0` or higher
+- Works on desktop and mobile
 
 ## Features
 
