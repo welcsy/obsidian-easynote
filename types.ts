@@ -55,7 +55,7 @@ export const DEFAULT_SETTINGS: EasyNoteSettings = {
     googleAccessToken:     '',
     googleTokenExpiry:     0,
     googleDriveFolderId:   '',
-    language:              'zh',
+    language:              'en',
     toolbarZoom:           1.0,
     toolbarLayout:         'full',
     toolbarShortcuts:      ['eraser', 'colors', 'undo', 'redo', 'pan', 'saveProject', 'export', 'none'],
