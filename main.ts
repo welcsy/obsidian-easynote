@@ -1074,8 +1074,18 @@ class EasyNoteView extends ItemView implements FeatureAPI {
         if (e.button !== 0) return;
         if (!e.isPrimary) return;
 
+
         this.canvas.setPointerCapture(e.pointerId);
         const { x: mx, y: my } = this.toCanvasCoords(e);
+
+        // [[Wikilink]] 點擊 → 在 Obsidian 開啟筆記 (select & pan mode)
+        if (this.tool === 'select' || this.tool === 'pan') {
+            const wikilinkHit = this.getWikilinkAt(mx, my);
+            if (wikilinkHit) {
+                this.app.workspace.openLinkText(wikilinkHit, '');
+                return;
+            }
+        }
 
         // 平移鎖定模式：單指單點也當作平移，不觸發任何圖層操作
         if (this.tool === 'pan') {
