@@ -4398,9 +4398,12 @@ class EasyNoteView extends ItemView implements FeatureAPI {
 
     // ── 專案儲存 / 載入 (.enote) ──────────────────────────────────────────────
     triggerSaveProject(): void {
-        const ts = this.localTimestamp();
-        const defaultName = this.lastProjectName || `EasyNote-${ts}`;
-        new ProjectNameModal(this.app, defaultName, (name) => this.saveProject(name)).open();
+        if (this.lastProjectName) {
+            this.saveProject(this.lastProjectName);
+        } else {
+            const ts = this.localTimestamp();
+            new ProjectNameModal(this.app, `EasyNote-${ts}`, (name) => this.saveProject(name)).open();
+        }
     }
 
     triggerLoadProject(): void {
